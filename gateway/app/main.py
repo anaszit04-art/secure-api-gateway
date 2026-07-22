@@ -1,11 +1,38 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from gateway.app.proxy.client import (
+    create_http_client,
+)
+from gateway.app.proxy.router import (
+    router as proxy_router,
+)
+
+
+@asynccontextmanager
+async def lifespan(
+    app: FastAPI,
+) -> AsyncIterator[None]:
+    async with create_http_client() as http_client:
+        app.state.http_client = http_client
+
+        yield
 
 
 app = FastAPI(
     title="Secure API Gateway",
-    description="API Gateway avec JWT, rate limiting et reverse proxy.",
+    description=(
+        "API Gateway avec JWT, rate limiting "
+        "et reverse proxy."
+    ),
     version="0.1.0",
+    lifespan=lifespan,
 )
+
+
+app.include_router(proxy_router)
 
 
 @app.get("/health", tags=["System"])
