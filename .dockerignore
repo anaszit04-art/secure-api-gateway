@@ -1,0 +1,30 @@
+# Environnements Python
+venv/
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# Caches Python
+__pycache__/
+*.py[cod]
+
+# Tests et couverture
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation et fichiers locaux
+README.md
+*.log
