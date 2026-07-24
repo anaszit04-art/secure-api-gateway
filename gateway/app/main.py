@@ -30,7 +30,7 @@ app = FastAPI(
         "API Gateway avec JWT, rate limiting "
         "et reverse proxy."
     ),
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 

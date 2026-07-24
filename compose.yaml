@@ -4,7 +4,7 @@ x-python-service: &python-service
   build:
     context: .
     dockerfile: Dockerfile
-  image: secure-api-gateway:phase1
+  image: secure-api-gateway:phase2
   init: true
   restart: unless-stopped
   read_only: true
@@ -90,6 +90,12 @@ services:
     environment:
       SERVICE_A_URL: http://service-a:8001
       SERVICE_B_URL: http://service-b:8002
+
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_ACCESS_TOKEN_MINUTES: ${JWT_ACCESS_TOKEN_MINUTES:-15}
+      JWT_ISSUER: ${JWT_ISSUER:-secure-api-gateway}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-secure-api-clients}
     depends_on:
       service-a:
         condition: service_healthy
