@@ -1,6 +1,16 @@
 import httpx
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+)
+
+from gateway.app.auth.dependencies import (
+    get_current_user,
+)
 
 from gateway.app.proxy.headers import (
     filter_request_headers,
@@ -11,10 +21,12 @@ from gateway.app.proxy.registry import (
     get_service_base_url,
 )
 
-
 router = APIRouter(
     prefix="/api",
     tags=["Proxy"],
+    dependencies=[
+        Depends(get_current_user),
+    ],
 )
 
 

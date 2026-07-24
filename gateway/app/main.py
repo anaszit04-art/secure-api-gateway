@@ -9,6 +9,9 @@ from gateway.app.proxy.client import (
 from gateway.app.proxy.router import (
     router as proxy_router,
 )
+from gateway.app.auth.router import (
+    router as auth_router,
+)
 
 
 @asynccontextmanager
@@ -27,10 +30,11 @@ app = FastAPI(
         "API Gateway avec JWT, rate limiting "
         "et reverse proxy."
     ),
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
+app.include_router(auth_router)
 
 app.include_router(proxy_router)
 

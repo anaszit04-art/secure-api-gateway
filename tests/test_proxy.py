@@ -1,10 +1,59 @@
 import json
-from typing import Any
+
+from datetime import datetime, timezone
+from typing import Any, Iterator
+from uuid import UUID
+
+import pytest
 
 import httpx
 from fastapi.testclient import TestClient
 
+from gateway.app.auth.dependencies import (
+    get_current_user,
+)
+from gateway.app.auth.models import UserPublic
+
 from gateway.app.main import app
+
+
+TEST_CURRENT_USER = UserPublic(
+    id=UUID(
+        "7f963fc4-f5de-4db0-b8ab-50949d63bc0a"
+    ),
+    username="proxy-test-user",
+    is_active=True,
+    created_at=datetime(
+        2026,
+        7,
+        24,
+        tzinfo=timezone.utc,
+    ),
+)
+
+
+@pytest.fixture(autouse=True)
+def override_proxy_authentication() -> Iterator[None]:
+    """
+    Isolate the legacy proxy-behaviour tests from JWT.
+
+    Authentication itself is tested separately.
+    """
+    original_overrides = (
+        app.dependency_overrides.copy()
+    )
+
+    app.dependency_overrides[
+        get_current_user
+    ] = lambda: TEST_CURRENT_USER
+
+    try:
+        yield
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(
+            original_overrides
+        )
 
 
 class FakeAsyncClient:
