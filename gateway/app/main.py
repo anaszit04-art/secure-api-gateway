@@ -9,6 +9,9 @@ from gateway.app.proxy.client import (
 from gateway.app.proxy.router import (
     router as proxy_router,
 )
+from gateway.app.auth.router import (
+    router as auth_router,
+)
 
 
 @asynccontextmanager
@@ -31,6 +34,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(auth_router)
 
 app.include_router(proxy_router)
 

@@ -3,7 +3,7 @@ import unicodedata
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -125,6 +125,20 @@ class UserPublic(BaseModel):
     username: str
     is_active: bool
     created_at: datetime
+
+class TokenResponse(BaseModel):
+    """
+    OAuth2-compatible access-token response.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+
 
 
 @dataclass(
