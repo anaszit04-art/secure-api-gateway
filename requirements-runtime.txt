@@ -4,3 +4,4 @@ httpx==0.28.1
 PyJWT==2.13.0
 pwdlib[argon2]==0.3.0
 python-multipart==0.0.32
+redis[hiredis]==8.1.0
