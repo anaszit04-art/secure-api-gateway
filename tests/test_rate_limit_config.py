@@ -229,3 +229,66 @@ def test_redacted_url_hides_password() -> None:
         "super-secret-password"
         not in repr(settings)
     )
+
+
+def test_redis_startup_verification_defaults_to_false() -> None:
+    settings = RedisSettings.from_environment(
+        {}
+    )
+
+    assert settings.verify_on_startup is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "true",
+        "1",
+        "yes",
+        "on",
+    ],
+)
+def test_redis_startup_verification_accepts_true_values(
+    value: str,
+) -> None:
+    settings = RedisSettings.from_environment(
+        {
+            "REDIS_VERIFY_ON_STARTUP": value,
+        }
+    )
+
+    assert settings.verify_on_startup is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "false",
+        "0",
+        "no",
+        "off",
+    ],
+)
+def test_redis_startup_verification_accepts_false_values(
+    value: str,
+) -> None:
+    settings = RedisSettings.from_environment(
+        {
+            "REDIS_VERIFY_ON_STARTUP": value,
+        }
+    )
+
+    assert settings.verify_on_startup is False
+
+
+def test_redis_startup_verification_rejects_invalid_value() -> None:
+    with pytest.raises(
+        RateLimitConfigError
+    ):
+        RedisSettings.from_environment(
+            {
+                "REDIS_VERIFY_ON_STARTUP": (
+                    "sometimes"
+                ),
+            }
+        )

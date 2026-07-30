@@ -1,3 +1,5 @@
+from typing import Annotated
+
 import httpx
 
 from fastapi import (
@@ -8,10 +10,6 @@ from fastapi import (
     Response,
 )
 
-from gateway.app.auth.dependencies import (
-    get_current_user,
-)
-
 from gateway.app.proxy.headers import (
     filter_request_headers,
     filter_response_headers,
@@ -20,13 +18,18 @@ from gateway.app.proxy.registry import (
     UnknownServiceError,
     get_service_base_url,
 )
+from gateway.app.rate_limit.dependencies import (
+    build_rate_limit_headers,
+    enforce_proxy_rate_limit,
+)
+from gateway.app.rate_limit.models import (
+    RateLimitDecision,
+)
+
 
 router = APIRouter(
     prefix="/api",
     tags=["Proxy"],
-    dependencies=[
-        Depends(get_current_user),
-    ],
 )
 
 
@@ -52,10 +55,16 @@ PROXY_METHODS = [
 async def proxy_request(
     request: Request,
     service_name: str,
+    rate_limit_decision: Annotated[
+        RateLimitDecision,
+        Depends(enforce_proxy_rate_limit),
+    ],
     path: str = "",
 ) -> Response:
     try:
-        base_url = get_service_base_url(service_name)
+        base_url = get_service_base_url(
+            service_name
+        )
     except UnknownServiceError as exc:
         raise HTTPException(
             status_code=404,
@@ -63,7 +72,8 @@ async def proxy_request(
         ) from exc
 
     target_url = (
-        f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+        f"{base_url.rstrip('/')}/"
+        f"{path.lstrip('/')}"
     )
 
     request_body = await request.body()
@@ -81,7 +91,9 @@ async def proxy_request(
         request.url.scheme
     )
 
-    original_host = request.headers.get("host")
+    original_host = request.headers.get(
+        "host"
+    )
 
     if original_host:
         outgoing_headers["x-forwarded-host"] = (
@@ -93,14 +105,16 @@ async def proxy_request(
     )
 
     try:
-        upstream_response = await http_client.request(
-            method=request.method,
-            url=target_url,
-            params=list(
-                request.query_params.multi_items()
-            ),
-            headers=outgoing_headers,
-            content=request_body,
+        upstream_response = (
+            await http_client.request(
+                method=request.method,
+                url=target_url,
+                params=list(
+                    request.query_params.multi_items()
+                ),
+                headers=outgoing_headers,
+                content=request_body,
+            )
         )
 
     except httpx.TimeoutException as exc:
@@ -112,13 +126,27 @@ async def proxy_request(
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=502,
-            detail="Upstream service unavailable",
+            detail=(
+                "Upstream service unavailable"
+            ),
         ) from exc
+
+    response_headers = (
+        filter_response_headers(
+            upstream_response.headers
+        )
+    )
+
+    response_headers.update(
+        build_rate_limit_headers(
+            rate_limit_decision
+        )
+    )
 
     return Response(
         content=upstream_response.content,
-        status_code=upstream_response.status_code,
-        headers=filter_response_headers(
-            upstream_response.headers
+        status_code=(
+            upstream_response.status_code
         ),
+        headers=response_headers,
     )

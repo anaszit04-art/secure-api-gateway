@@ -20,6 +20,7 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 2.0
 DEFAULT_SOCKET_TIMEOUT_SECONDS = 2.0
 DEFAULT_MAX_CONNECTIONS = 20
 DEFAULT_HEALTH_CHECK_INTERVAL_SECONDS = 30
+DEFAULT_VERIFY_ON_STARTUP = False
 
 _ALLOWED_REDIS_SCHEMES = frozenset(
     {
@@ -45,8 +46,8 @@ class RedisSettings:
     """
     Validated Redis configuration used by the rate limiter.
 
-    The URL is excluded from the dataclass representation to avoid
-    accidentally exposing Redis credentials in logs.
+    The Redis URL is excluded from repr() so credentials cannot
+    accidentally appear in application logs.
     """
 
     url: str = field(
@@ -64,8 +65,21 @@ class RedisSettings:
     health_check_interval_seconds: int = (
         DEFAULT_HEALTH_CHECK_INTERVAL_SECONDS
     )
+    verify_on_startup: bool = (
+        DEFAULT_VERIFY_ON_STARTUP
+    )
 
     def __post_init__(self) -> None:
+        if not isinstance(self.url, str):
+            raise RateLimitConfigError(
+                "REDIS_URL must be a string."
+            )
+
+        if not isinstance(self.key_prefix, str):
+            raise RateLimitConfigError(
+                "REDIS_KEY_PREFIX must be a string."
+            )
+
         normalized_url = self.url.strip()
         normalized_prefix = self.key_prefix.strip()
 
@@ -90,22 +104,26 @@ class RedisSettings:
         self._validate_key_prefix(
             normalized_prefix
         )
+
         self._validate_positive_float(
             name="connect_timeout_seconds",
             value=self.connect_timeout_seconds,
             maximum=60.0,
         )
+
         self._validate_positive_float(
             name="socket_timeout_seconds",
             value=self.socket_timeout_seconds,
             maximum=60.0,
         )
+
         self._validate_integer(
             name="max_connections",
             value=self.max_connections,
             minimum=1,
             maximum=1000,
         )
+
         self._validate_integer(
             name="health_check_interval_seconds",
             value=(
@@ -115,14 +133,21 @@ class RedisSettings:
             maximum=3600,
         )
 
+        if not isinstance(
+            self.verify_on_startup,
+            bool,
+        ):
+            raise RateLimitConfigError(
+                "verify_on_startup must be a boolean."
+            )
+
     @classmethod
     def from_environment(
         cls,
         environ: Mapping[str, str] | None = None,
     ) -> RedisSettings:
         """
-        Load and validate Redis configuration from environment
-        variables.
+        Load Redis configuration from environment variables.
         """
 
         source = (
@@ -140,19 +165,15 @@ class RedisSettings:
                 "REDIS_KEY_PREFIX",
                 DEFAULT_REDIS_KEY_PREFIX,
             ),
-            connect_timeout_seconds=(
-                _read_float(
-                    source,
-                    "REDIS_CONNECT_TIMEOUT_SECONDS",
-                    DEFAULT_CONNECT_TIMEOUT_SECONDS,
-                )
+            connect_timeout_seconds=_read_float(
+                source,
+                "REDIS_CONNECT_TIMEOUT_SECONDS",
+                DEFAULT_CONNECT_TIMEOUT_SECONDS,
             ),
-            socket_timeout_seconds=(
-                _read_float(
-                    source,
-                    "REDIS_SOCKET_TIMEOUT_SECONDS",
-                    DEFAULT_SOCKET_TIMEOUT_SECONDS,
-                )
+            socket_timeout_seconds=_read_float(
+                source,
+                "REDIS_SOCKET_TIMEOUT_SECONDS",
+                DEFAULT_SOCKET_TIMEOUT_SECONDS,
             ),
             max_connections=_read_integer(
                 source,
@@ -171,14 +192,17 @@ class RedisSettings:
                     ),
                 )
             ),
+            verify_on_startup=_read_boolean(
+                source,
+                "REDIS_VERIFY_ON_STARTUP",
+                DEFAULT_VERIFY_ON_STARTUP,
+            ),
         )
 
     @property
     def redacted_url(self) -> str:
         """
         Return the Redis URL with its password masked.
-
-        This value is safe to use in diagnostic logs.
         """
 
         parsed = self._split_url()
@@ -197,11 +221,9 @@ class RedisSettings:
             else ""
         )
 
-        username = parsed.username
-
-        if username:
+        if parsed.username:
             credentials = (
-                f"{quote(username, safe='')}:***@"
+                f"{quote(parsed.username, safe='')}:***@"
             )
         else:
             credentials = ":***@"
@@ -231,9 +253,8 @@ class RedisSettings:
 
         return parsed
 
-    @classmethod
+    @staticmethod
     def _validate_url(
-        cls,
         value: str,
     ) -> None:
         if not value:
@@ -264,8 +285,7 @@ class RedisSettings:
 
         if parsed.fragment:
             raise RateLimitConfigError(
-                "REDIS_URL must not include "
-                "a fragment."
+                "REDIS_URL must not include a fragment."
             )
 
         database_path = parsed.path.lstrip("/")
@@ -368,3 +388,34 @@ def _read_integer(
         raise RateLimitConfigError(
             f"{name} must be an integer."
         ) from exc
+
+
+def _read_boolean(
+    environ: Mapping[str, str],
+    name: str,
+    default: bool,
+) -> bool:
+    raw_value = environ.get(
+        name,
+        str(default),
+    ).strip().casefold()
+
+    if raw_value in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return True
+
+    if raw_value in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return False
+
+    raise RateLimitConfigError(
+        f"{name} must be a boolean."
+    )
