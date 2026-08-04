@@ -20,6 +20,9 @@ from gateway.app.rate_limit.client import (
 from gateway.app.rate_limit.config import (
     RedisSettings,
 )
+from gateway.app.rate_limit.login import (
+    RedisLoginProtection,
+)
 from gateway.app.rate_limit.service import (
     RedisRateLimiter,
 )
@@ -38,9 +41,19 @@ async def lifespan(
     )
 
     app.state.redis_client = redis_client
+
     app.state.rate_limiter = RedisRateLimiter(
         client=redis_client,
         settings=redis_settings,
+    )
+
+    app.state.login_protection = (
+        RedisLoginProtection(
+            client=redis_client,
+            key_prefix=(
+                redis_settings.key_prefix
+            ),
+        )
     )
 
     try:
@@ -68,7 +81,7 @@ app = FastAPI(
         "API Gateway avec JWT, rate limiting "
         "et reverse proxy."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 

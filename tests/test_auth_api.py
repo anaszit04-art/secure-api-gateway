@@ -19,9 +19,63 @@ from gateway.app.auth.tokens import (
     decode_access_token,
 )
 from gateway.app.main import app
+from gateway.app.rate_limit.dependencies import (
+    get_rate_limiter,
+)
+from gateway.app.rate_limit.login import (
+    LoginProtectionDecision,
+)
+from gateway.app.rate_limit.login_dependencies import (
+    get_login_protection,
+)
+from gateway.app.rate_limit.models import (
+    RateLimitDecision,
+)
 
 
 VALID_PASSWORD = "correct-horse-battery-staple"
+
+
+class FakeAllowedRateLimiter:
+    async def check(
+        self,
+        **_: object,
+    ) -> RateLimitDecision:
+        return RateLimitDecision(
+            allowed=True,
+            limit=10,
+            remaining=9,
+            retry_after_seconds=0,
+            reset_after_seconds=5,
+        )
+
+
+class FakeOpenLoginProtection:
+    async def check_lock(
+        self,
+        **_: object,
+    ) -> LoginProtectionDecision:
+        return LoginProtectionDecision(
+            locked=False,
+            failures=0,
+            retry_after_seconds=0,
+        )
+
+    async def record_failure(
+        self,
+        **_: object,
+    ) -> LoginProtectionDecision:
+        return LoginProtectionDecision(
+            locked=False,
+            failures=1,
+            retry_after_seconds=0,
+        )
+
+    async def reset(
+        self,
+        **_: object,
+    ) -> bool:
+        return True
 
 
 @pytest.fixture
@@ -54,6 +108,14 @@ def api_context(
     app.dependency_overrides[
         get_user_repository
     ] = lambda: repository
+
+    app.dependency_overrides[
+        get_rate_limiter
+    ] = lambda: FakeAllowedRateLimiter()
+
+    app.dependency_overrides[
+        get_login_protection
+    ] = lambda: FakeOpenLoginProtection()
 
     with TestClient(app) as client:
         yield client, repository, auth_settings
