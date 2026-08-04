@@ -18,6 +18,26 @@ from gateway.app.auth.tokens import (
     create_access_token,
 )
 from gateway.app.main import app
+from gateway.app.rate_limit.dependencies import (
+    get_rate_limiter,
+)
+from gateway.app.rate_limit.models import (
+    RateLimitDecision,
+)
+
+
+class FakeAllowedRateLimiter:
+    async def check(
+        self,
+        **_: Any,
+    ) -> RateLimitDecision:
+        return RateLimitDecision(
+            allowed=True,
+            limit=60,
+            remaining=59,
+            retry_after_seconds=0,
+            reset_after_seconds=1,
+        )
 
 
 class FakeAsyncClient:
@@ -82,6 +102,10 @@ def proxy_auth_context(
     app.dependency_overrides[
         get_user_repository
     ] = lambda: repository
+
+    app.dependency_overrides[
+        get_rate_limiter
+    ] = lambda: FakeAllowedRateLimiter()
 
     try:
         with TestClient(app) as client:

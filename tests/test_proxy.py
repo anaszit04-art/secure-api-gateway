@@ -15,6 +15,12 @@ from gateway.app.auth.dependencies import (
 from gateway.app.auth.models import UserPublic
 
 from gateway.app.main import app
+from gateway.app.rate_limit.dependencies import (
+    get_rate_limiter,
+)
+from gateway.app.rate_limit.models import (
+    RateLimitDecision,
+)
 
 
 TEST_CURRENT_USER = UserPublic(
@@ -47,12 +53,30 @@ def override_proxy_authentication() -> Iterator[None]:
         get_current_user
     ] = lambda: TEST_CURRENT_USER
 
+    app.dependency_overrides[
+        get_rate_limiter
+    ] = lambda: FakeAllowedRateLimiter()
+
     try:
         yield
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(
             original_overrides
+        )
+
+
+class FakeAllowedRateLimiter:
+    async def check(
+        self,
+        **_: Any,
+    ) -> RateLimitDecision:
+        return RateLimitDecision(
+            allowed=True,
+            limit=60,
+            remaining=59,
+            retry_after_seconds=0,
+            reset_after_seconds=1,
         )
 
 

@@ -1,25 +1,35 @@
 name: secure-api-gateway
 
+
 x-python-service: &python-service
   build:
     context: .
     dockerfile: Dockerfile
-  image: secure-api-gateway:phase2
+
+  image: secure-api-gateway:phase3
+
   init: true
   restart: unless-stopped
+
   read_only: true
+
   tmpfs:
     - /tmp:size=16m,mode=1777
+
   security_opt:
     - no-new-privileges:true
+
   cap_drop:
     - ALL
+
   networks:
     - gateway-internal
+
 
 services:
   service-a:
     <<: *python-service
+
     command:
       - python
       - -m
@@ -29,8 +39,10 @@ services:
       - 0.0.0.0
       - --port
       - "8001"
+
     expose:
       - "8001"
+
     healthcheck:
       test:
         - CMD
@@ -47,8 +59,10 @@ services:
       retries: 5
       start_period: 5s
 
+
   service-b:
     <<: *python-service
+
     command:
       - python
       - -m
@@ -58,8 +72,10 @@ services:
       - 0.0.0.0
       - --port
       - "8002"
+
     expose:
       - "8002"
+
     healthcheck:
       test:
         - CMD
@@ -76,8 +92,56 @@ services:
       retries: 5
       start_period: 5s
 
+
+  redis:
+    image: redis:7.4-alpine
+
+    init: true
+    user: redis
+    restart: unless-stopped
+
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+
+    expose:
+      - "6379"
+
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+    read_only: true
+
+    tmpfs:
+      - /data:size=32m,mode=1777
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    networks:
+      - gateway-internal
+
+
   gateway:
     <<: *python-service
+
     command:
       - python
       - -m
@@ -87,22 +151,37 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+
     environment:
       SERVICE_A_URL: http://service-a:8001
       SERVICE_B_URL: http://service-b:8002
 
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      JWT_ACCESS_TOKEN_MINUTES: ${JWT_ACCESS_TOKEN_MINUTES:-15}
-      JWT_ISSUER: ${JWT_ISSUER:-secure-api-gateway}
-      JWT_AUDIENCE: ${JWT_AUDIENCE:-secure-api-clients}
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}"
+      JWT_ALGORITHM: "${JWT_ALGORITHM:-HS256}"
+      JWT_ACCESS_TOKEN_MINUTES: "${JWT_ACCESS_TOKEN_MINUTES:-15}"
+      JWT_ISSUER: "${JWT_ISSUER:-secure-api-gateway}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE:-secure-api-clients}"
+
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: "${REDIS_KEY_PREFIX:-secure-api-gateway}"
+      REDIS_CONNECT_TIMEOUT_SECONDS: "${REDIS_CONNECT_TIMEOUT_SECONDS:-2}"
+      REDIS_SOCKET_TIMEOUT_SECONDS: "${REDIS_SOCKET_TIMEOUT_SECONDS:-2}"
+      REDIS_MAX_CONNECTIONS: "${REDIS_MAX_CONNECTIONS:-20}"
+      REDIS_VERIFY_ON_STARTUP: "true"
+
     depends_on:
       service-a:
         condition: service_healthy
+
       service-b:
         condition: service_healthy
+
+      redis:
+        condition: service_healthy
+
     ports:
       - "127.0.0.1:8000:8000"
+
     healthcheck:
       test:
         - CMD
@@ -118,6 +197,7 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+
 
 networks:
   gateway-internal:
