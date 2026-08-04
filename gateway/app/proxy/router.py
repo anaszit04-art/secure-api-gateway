@@ -46,10 +46,12 @@ PROXY_METHODS = [
 
 @router.api_route(
     "/{service_name}",
+    include_in_schema=False,
     methods=PROXY_METHODS,
 )
 @router.api_route(
     "/{service_name}/{path:path}",
+    include_in_schema=False,
     methods=PROXY_METHODS,
 )
 async def proxy_request(
