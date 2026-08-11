@@ -93,6 +93,44 @@ services:
       start_period: 5s
 
 
+
+  postgres:
+    image: postgres:18.4-alpine
+
+    init: true
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-gateway}"
+      POSTGRES_USER: "${POSTGRES_USER:-gateway}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+
+    expose:
+      - "5432"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready
+          -U "$$POSTGRES_USER"
+          -d "$$POSTGRES_DB"
+          -h 127.0.0.1
+          -p 5432
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    security_opt:
+      - no-new-privileges:true
+
+    networks:
+      - gateway-internal
+
   redis:
     image: redis:7.4-alpine
 
@@ -156,6 +194,15 @@ services:
       SERVICE_A_URL: http://service-a:8001
       SERVICE_B_URL: http://service-b:8002
 
+
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-gateway}"
+      DATABASE_POOL_SIZE: "${DATABASE_POOL_SIZE:-5}"
+      DATABASE_MAX_OVERFLOW: "${DATABASE_MAX_OVERFLOW:-10}"
+      DATABASE_POOL_TIMEOUT_SECONDS: "${DATABASE_POOL_TIMEOUT_SECONDS:-5}"
+      DATABASE_CONNECT_TIMEOUT_SECONDS: "${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}"
+      DATABASE_VERIFY_ON_STARTUP: "${DATABASE_VERIFY_ON_STARTUP:-false}"
+      DATABASE_APPLICATION_NAME: "${DATABASE_APPLICATION_NAME:-secure-api-gateway}"
+
       JWT_SECRET_KEY: "${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}"
       JWT_ALGORITHM: "${JWT_ALGORITHM:-HS256}"
       JWT_ACCESS_TOKEN_MINUTES: "${JWT_ACCESS_TOKEN_MINUTES:-15}"
@@ -170,6 +217,9 @@ services:
       REDIS_VERIFY_ON_STARTUP: "true"
 
     depends_on:
+      postgres:
+        condition: service_healthy
+
       service-a:
         condition: service_healthy
 
@@ -197,6 +247,10 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+
+
+volumes:
+  postgres-data:
 
 
 networks:
