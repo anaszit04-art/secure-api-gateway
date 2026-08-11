@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    String,
+    Text,
+    Uuid,
+    func,
+    true,
+)
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_column,
+)
+
+from gateway.app.auth.models import (
+    MAXIMUM_USERNAME_LENGTH,
+)
+from gateway.app.database.base import Base
+
+
+class UserRecord(Base):
+    """
+    Persistent PostgreSQL representation of a user.
+
+    Password hashes are stored internally and this model
+    must never be returned directly by an API endpoint.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(
+            as_uuid=True,
+        ),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    username: Mapped[str] = mapped_column(
+        String(
+            MAXIMUM_USERNAME_LENGTH
+        ),
+        nullable=False,
+        unique=True,
+    )
+
+    hashed_password: Mapped[str] = (
+        mapped_column(
+            Text,
+            nullable=False,
+        )
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=true(),
+    )
+
+    created_at: Mapped[datetime] = (
+        mapped_column(
+            DateTime(
+                timezone=True,
+            ),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+
+    updated_at: Mapped[datetime] = (
+        mapped_column(
+            DateTime(
+                timezone=True,
+            ),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
