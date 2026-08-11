@@ -24,6 +24,10 @@ RUN python -m pip install \
         --requirement requirements-runtime.txt
 
 COPY --chown=10001:10001 gateway ./gateway
+
+COPY --chown=10001:10001 alembic.ini ./alembic.ini
+
+COPY --chown=10001:10001 migrations ./migrations
 COPY --chown=10001:10001 microservices ./microservices
 
 USER 10001:10001

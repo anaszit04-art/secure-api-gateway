@@ -177,6 +177,34 @@ services:
       - gateway-internal
 
 
+
+  migrate:
+    <<: *python-service
+
+    restart: "no"
+
+    command:
+      - alembic
+      - upgrade
+      - head
+
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-gateway}"
+      DATABASE_POOL_SIZE: "${DATABASE_POOL_SIZE:-5}"
+      DATABASE_MAX_OVERFLOW: "${DATABASE_MAX_OVERFLOW:-10}"
+      DATABASE_POOL_TIMEOUT_SECONDS: "${DATABASE_POOL_TIMEOUT_SECONDS:-5}"
+      DATABASE_CONNECT_TIMEOUT_SECONDS: "${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}"
+      DATABASE_VERIFY_ON_STARTUP: "true"
+      DATABASE_APPLICATION_NAME: "secure-api-gateway-migrations"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    profiles:
+      - tools
+
+
   gateway:
     <<: *python-service
 
