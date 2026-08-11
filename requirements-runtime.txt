@@ -5,3 +5,5 @@ PyJWT==2.13.0
 pwdlib[argon2]==0.3.0
 python-multipart==0.0.32
 redis[hiredis]==8.1.0
+SQLAlchemy[asyncio]==2.0.51
+asyncpg==0.31.0
