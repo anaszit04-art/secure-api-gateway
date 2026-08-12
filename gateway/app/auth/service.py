@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 from typing import Final
+
+from anyio import to_thread
 
 from gateway.app.auth.config import AuthSettings
 from gateway.app.auth.models import (
@@ -15,6 +19,8 @@ from gateway.app.auth.passwords import (
 )
 from gateway.app.auth.repository import (
     InMemoryUserRepository,
+    UserRepository,
+    adapt_user_repository,
 )
 from gateway.app.auth.tokens import (
     create_access_token,
@@ -43,38 +49,55 @@ class AuthenticationService:
     """
     Coordinate user registration, password verification
     and JWT access-token creation.
+
+    Persistence operations are asynchronous. Expensive
+    Argon2 operations run outside the event loop.
     """
 
     def __init__(
         self,
         *,
-        repository: InMemoryUserRepository,
+        repository: (
+            UserRepository
+            | InMemoryUserRepository
+        ),
         settings: AuthSettings,
     ) -> None:
-        self._repository = repository
+        self._repository = (
+            adapt_user_repository(
+                repository
+            )
+        )
+
         self._settings = settings
 
-    def register_user(
+    async def register_user(
         self,
         registration: UserRegistration,
     ) -> UserPublic:
         """
-        Hash and store a new user.
-
-        Only the safe public representation is returned.
+        Hash and persist a new user.
         """
-        hashed_password = hash_password(
-            registration.password
+
+        hashed_password = (
+            await to_thread.run_sync(
+                hash_password,
+                registration.password,
+            )
         )
 
-        stored_user = self._repository.create_user(
-            username=registration.username,
-            hashed_password=hashed_password,
+        stored_user = (
+            await self._repository.create_user(
+                username=registration.username,
+                hashed_password=hashed_password,
+            )
         )
 
-        return to_public_user(stored_user)
+        return to_public_user(
+            stored_user
+        )
 
-    def authenticate_user(
+    async def authenticate_user(
         self,
         *,
         username: str,
@@ -84,11 +107,13 @@ class AuthenticationService:
         Verify credentials and return the stored user.
 
         Unknown usernames and incorrect passwords produce
-        the same public error.
+        the same externally visible failure.
         """
+
         try:
             stored_user = (
-                self._repository.get_by_username(
+                await self._repository
+                .get_by_username(
                     username
                 )
             )
@@ -96,9 +121,11 @@ class AuthenticationService:
             stored_user = None
 
         if stored_user is None:
-            # Perform a real Argon2 verification even when
-            # the user is absent to reduce timing differences.
-            verify_password(
+            # Always perform a real password verification
+            # for an unknown username to reduce timing
+            # differences and username enumeration.
+            await to_thread.run_sync(
+                verify_password,
                 password,
                 DUMMY_PASSWORD_HASH,
             )
@@ -107,29 +134,39 @@ class AuthenticationService:
                 INVALID_CREDENTIALS_MESSAGE
             )
 
-        is_valid, replacement_hash = (
-            verify_and_update_password(
-                password,
-                stored_user.hashed_password,
-            )
+        (
+            is_valid,
+            replacement_hash,
+        ) = await to_thread.run_sync(
+            verify_and_update_password,
+            password,
+            stored_user.hashed_password,
         )
 
-        if not is_valid or not stored_user.is_active:
+        if (
+            not is_valid
+            or not stored_user.is_active
+        ):
             raise AuthenticationError(
                 INVALID_CREDENTIALS_MESSAGE
             )
 
         if replacement_hash is not None:
             stored_user = (
-                self._repository.update_password_hash(
-                    username=stored_user.username,
-                    hashed_password=replacement_hash,
+                await self._repository
+                .update_password_hash(
+                    username=(
+                        stored_user.username
+                    ),
+                    hashed_password=(
+                        replacement_hash
+                    ),
                 )
             )
 
         return stored_user
 
-    def authenticate_and_create_token(
+    async def authenticate_and_create_token(
         self,
         *,
         username: str,
@@ -138,9 +175,12 @@ class AuthenticationService:
         """
         Authenticate credentials and issue an access token.
         """
-        stored_user = self.authenticate_user(
-            username=username,
-            password=password,
+
+        stored_user = (
+            await self.authenticate_user(
+                username=username,
+                password=password,
+            )
         )
 
         return create_access_token(

@@ -11,6 +11,7 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordRequestForm
 
 from gateway.app.auth.dependencies import (
+    authentication_database_unavailable,
     get_authentication_service,
     get_current_user,
 )
@@ -21,6 +22,7 @@ from gateway.app.auth.models import (
 )
 from gateway.app.auth.repository import (
     UserAlreadyExistsError,
+    UserRepositoryBackendError,
 )
 from gateway.app.auth.service import (
     INVALID_CREDENTIALS_MESSAGE,
@@ -60,7 +62,7 @@ router = APIRouter(
     response_model=UserPublic,
     status_code=status.HTTP_201_CREATED,
 )
-def register_user(
+async def register_user(
     registration: UserRegistration,
     service: Annotated[
         AuthenticationService,
@@ -72,7 +74,7 @@ def register_user(
     """
 
     try:
-        return service.register_user(
+        return await service.register_user(
             registration
         )
     except UserAlreadyExistsError as exc:
@@ -81,6 +83,11 @@ def register_user(
             detail=(
                 "Username is already registered."
             ),
+        ) from exc
+
+    except UserRepositoryBackendError as exc:
+        raise (
+            authentication_database_unavailable()
         ) from exc
 
 
@@ -146,11 +153,16 @@ async def issue_access_token(
 
     try:
         access_token = (
-            service.authenticate_and_create_token(
+            await service.authenticate_and_create_token(
                 username=form_data.username,
                 password=form_data.password,
             )
         )
+    except UserRepositoryBackendError as exc:
+        raise (
+            authentication_database_unavailable()
+        ) from exc
+
     except AuthenticationError as exc:
         try:
             failure_decision = (

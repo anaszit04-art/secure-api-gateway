@@ -1,23 +1,29 @@
 # Secure API Gateway
 
-API Gateway sécurisée développée avec FastAPI, JWT, Redis et Docker.
+API Gateway sécurisée développée avec FastAPI, JWT, Redis,
+PostgreSQL, SQLAlchemy, Alembic et Docker.
 
-Le projet centralise l'authentification, la limitation de débit,
-la protection anti-brute-force et le routage vers des microservices
-internes.
+Le projet centralise l'authentification, la persistance des
+utilisateurs, la limitation de débit, la protection
+anti-brute-force et le routage vers des microservices internes.
 
 ## État du projet
 
-Phase 3 terminée :
+Phase 4 terminée :
 
 - authentification JWT ;
+- persistance PostgreSQL des utilisateurs ;
+- accès asynchrone SQLAlchemy + asyncpg ;
+- migrations Alembic ;
 - reverse proxy authentifié ;
 - rate limiting Redis distribué ;
 - protection anti-brute-force ;
 - verrouillage temporaire des comptes ;
 - limitation des connexions par adresse IP ;
-- durcissement des conteneurs Docker ;
-- 221 tests automatisés réussis.
+- stratégie fail-closed Redis et PostgreSQL ;
+- persistance validée après reconstruction des conteneurs ;
+- durcissement Docker ;
+- 298 tests automatisés réussis.
 
 ## Architecture
 
@@ -26,36 +32,75 @@ Phase 3 terminée :
          | 127.0.0.1:8000
          v
     FastAPI Gateway
-      - JWT
-      - Rate limiting
-      - Anti-brute-force
-      - Reverse proxy
-         |
-         +------ Redis interne
-         |
-         +------ Service A
-         |
-         +------ Service B
+      |
+      +-- JWT
+      |
+      +-- AuthenticationService async
+      |       |
+      |       v
+      |   UserRepository
+      |       |
+      |       v
+      |   PostgreSQLUserRepository
+      |       |
+      |       v
+      |   SQLAlchemy AsyncSession
+      |       |
+      |       v
+      |     asyncpg
+      |       |
+      |       v
+      |   PostgreSQL
+      |
+      +-- Redis
+      |    |
+      |    +-- Rate limiting
+      |    |
+      |    +-- Anti-brute-force
+      |
+      +-- Reverse proxy
+           |
+           +-- Service A
+           |
+           +-- Service B
 
-Seule la Gateway est publiée sur la machine hôte.
+Seule la Gateway est publiée sur la machine hôte :
 
-Redis et les microservices sont uniquement accessibles depuis le
-réseau Docker interne.
+    127.0.0.1:8000
+
+PostgreSQL, Redis et les microservices restent uniquement
+accessibles depuis le réseau Docker interne.
+
+Les migrations SQL sont gérées par Alembic :
+
+    Alembic
+       |
+       v
+    1cc279e452ed
+       |
+       v
+    users
 
 ## Structure du projet
 
     gateway/
     └── app/
         ├── auth/
+        ├── database/
         ├── proxy/
         ├── rate_limit/
         └── main.py
+
+    migrations/
+    └── versions/
 
     microservices/
     ├── service_a/
     └── service_b/
 
     tests/
+
+    alembic.ini
     compose.yaml
     Dockerfile
     requirements.txt
@@ -68,15 +113,178 @@ réseau Docker interne.
 - inscription locale ;
 - normalisation des noms d'utilisateur ;
 - hachage Argon2 des mots de passe ;
+- stockage persistant des hashes dans PostgreSQL ;
 - jetons JWT HS256 ;
 - validation de l'émetteur et de l'audience ;
 - durée configurable des jetons ;
 - message générique pour les identifiants incorrects ;
-- vérification Argon2 factice pour les utilisateurs inconnus.
+- vérification Argon2 factice pour les utilisateurs inconnus ;
+- renouvellement automatique d'un hash devenu obsolète ;
+- aucune exposition du mot de passe ou du hash dans les réponses API.
+
+### Persistance PostgreSQL
+
+Les utilisateurs sont stockés dans PostgreSQL via :
+
+    AuthenticationService
+        |
+        v
+    UserRepository async
+        |
+        v
+    PostgreSQLUserRepository
+        |
+        v
+    SQLAlchemy AsyncSession
+        |
+        v
+    asyncpg
+        |
+        v
+    PostgreSQL
+
+Le modèle `users` contient notamment :
+
+- UUID ;
+- username normalisé ;
+- hash du mot de passe ;
+- état actif/inactif ;
+- date de création ;
+- date de mise à jour.
+
+La contrainte d'unicité du nom d'utilisateur est également
+garantie au niveau PostgreSQL.
+
+Les inscriptions concurrentes d'un même utilisateur ont été
+validées :
+
+    1 x HTTP 201
+    9 x HTTP 409
+    1 seule ligne PostgreSQL
+
+### Migrations Alembic
+
+La migration initiale est :
+
+    1cc279e452ed
+
+Elle crée la table `users`.
+
+Appliquer les migrations :
+
+    docker compose \
+      --profile tools \
+      run \
+      --rm \
+      migrate \
+      alembic upgrade head
+
+Afficher la migration courante :
+
+    docker compose \
+      --profile tools \
+      run \
+      --rm \
+      migrate \
+      alembic current
+
+Afficher les heads :
+
+    docker compose \
+      --profile tools \
+      run \
+      --rm \
+      migrate \
+      alembic heads
+
+Détecter une dérive ORM / migration :
+
+    docker compose \
+      --profile tools \
+      run \
+      --rm \
+      migrate \
+      alembic check
+
+État validé :
+
+    1cc279e452ed (head)
+
+    No new upgrade operations detected.
+
+### Résilience PostgreSQL
+
+Les erreurs SQLAlchemy ou asyncpg sont interceptées à la
+frontière du repository.
+
+Une panne PostgreSQL n'est jamais interprétée comme un mauvais
+mot de passe.
+
+Lorsque PostgreSQL devient indisponible :
+
+    /auth/register      -> HTTP 503
+    /auth/token         -> HTTP 503
+    /auth/me            -> HTTP 503
+    /api/* protégé      -> HTTP 503
+
+La réponse utilise :
+
+    Retry-After: 1
+
+Le message retourné reste générique et ne révèle aucune
+information SQL interne.
+
+La route :
+
+    GET /health
+
+reste disponible avec HTTP 200 car elle représente actuellement
+la liveness de la Gateway.
+
+Après redémarrage de PostgreSQL, le pool SQLAlchemy récupère
+automatiquement les connexions grâce notamment à
+`pool_pre_ping`.
+
+### Persistance après redémarrage
+
+La persistance a été testée avec la procédure suivante :
+
+    création utilisateur
+          |
+          v
+    PostgreSQL
+          |
+          v
+    destruction Gateway
+          |
+          v
+    recréation Gateway
+          |
+          v
+    même utilisateur disponible
+
+Un test plus strict a également détruit tout le stack Docker
+sans supprimer le volume :
+
+    docker compose down
+
+Le volume :
+
+    secure-api-gateway_postgres-data
+
+a été conservé.
+
+Après reconstruction complète du stack :
+
+- le même UUID utilisateur était présent ;
+- l'ancien JWT restait valide ;
+- une nouvelle authentification réussissait ;
+- le reverse proxy authentifié fonctionnait toujours.
 
 ### Reverse proxy
 
-Les routes `/api/*` nécessitent un JWT valide.
+Les routes `/api/*` nécessitent un JWT valide et un utilisateur
+actif chargé depuis PostgreSQL.
 
 La Gateway transfère les requêtes vers les services enregistrés
 tout en filtrant les headers sensibles.
@@ -85,6 +293,9 @@ Services disponibles :
 
 - `service-a` ;
 - `service-b`.
+
+Les routes génériques du proxy sont volontairement exclues du
+schéma OpenAPI.
 
 ### Rate limiting Redis
 
@@ -111,34 +322,108 @@ Politique par adresse IP :
 
 - capacité : 10 tentatives ;
 - recharge : 0,2 tentative par seconde ;
-- une nouvelle tentative toutes les cinq secondes après épuisement ;
 - utilisation de l'adresse réseau directe ;
-- `X-Forwarded-For` ignoré tant qu'aucun proxy fiable n'est configuré.
+- `X-Forwarded-For` ignoré tant qu'aucun proxy fiable
+  n'est configuré.
 
 Politique par compte :
 
 - seuil : 5 échecs ;
 - fenêtre : 900 secondes ;
 - verrouillage : 300 secondes ;
-- suppression du compteur après une connexion réussie ;
+- suppression du compteur après connexion réussie ;
 - identifiant normalisé puis haché en SHA-256.
 
-Lorsque Redis est indisponible, les routes protégées appliquent
-une stratégie fail-closed et retournent une réponse HTTP 503.
+Validation observée :
+
+    tentative 1 -> 401
+    tentative 2 -> 401
+    tentative 3 -> 401
+    tentative 4 -> 401
+    tentative 5 -> 429
+    tentative 6 -> 429
+
+Les noms d'utilisateur ne sont pas stockés en clair dans les
+clés Redis.
+
+Lorsque Redis est indisponible, les routes protégées utilisent
+également une stratégie fail-closed et retournent HTTP 503.
+
+## Séparation PostgreSQL / Redis
+
+PostgreSQL conserve les données durables :
+
+- utilisateurs ;
+- hashes de mots de passe ;
+- états de compte ;
+- timestamps.
+
+Redis conserve uniquement les états temporaires de sécurité :
+
+- Token Bucket ;
+- compteurs d'échecs ;
+- verrouillages temporaires ;
+- rate limiting.
+
+Un `FLUSHDB` Redis ne supprime donc aucun utilisateur.
 
 ## Durcissement Docker
 
-Les conteneurs utilisent :
+### Gateway et microservices Python
 
-- un utilisateur non-root ;
-- un système de fichiers en lecture seule ;
+Les conteneurs Python utilisent notamment :
+
+- utilisateur non-root ;
+- système de fichiers en lecture seule ;
 - `no-new-privileges:true` ;
 - `cap_drop: ALL` ;
-- des répertoires temporaires en `tmpfs` ;
+- `/tmp` en `tmpfs` ;
+- réseau Docker interne.
+
+### Redis
+
+Redis utilise notamment :
+
+- utilisateur `redis` ;
+- système de fichiers en lecture seule ;
+- `no-new-privileges:true` ;
+- `cap_drop: ALL` ;
+- `/data` en `tmpfs` ;
+- aucun port publié sur l'hôte.
+
+Redis ne conserve volontairement aucune donnée métier durable.
+
+### PostgreSQL
+
+PostgreSQL utilise :
+
+- l'image `postgres:18.4-alpine` ;
+- `no-new-privileges:true` ;
 - un réseau Docker interne ;
-- aucun port hôte pour Redis ;
-- aucun port hôte pour les microservices ;
-- une exposition de la Gateway limitée à `127.0.0.1:8000`.
+- aucun port publié sur l'hôte ;
+- un volume Docker nommé persistant ;
+- une authentification SCRAM pour les connexions réseau.
+
+Le port `5432` est uniquement exposé à l'intérieur du réseau
+Docker.
+
+### Exposition réseau
+
+Seule la Gateway est publiée :
+
+    127.0.0.1:8000 -> 8000
+
+PostgreSQL :
+
+    5432/tcp
+
+sans publication hôte.
+
+Redis :
+
+    6379/tcp
+
+sans publication hôte.
 
 ## Prérequis
 
@@ -153,7 +438,13 @@ Créer le fichier local :
 
     cp .env.example .env
 
-Le fichier `.env` ne doit jamais être versionné.
+Le fichier `.env` :
+
+- contient des secrets locaux ;
+- ne doit jamais être versionné ;
+- est ignoré par Git.
+
+Ne jamais afficher son contenu dans des logs ou des captures.
 
 Variables JWT :
 
@@ -171,37 +462,59 @@ Variables Redis :
 |---|---|---|
 | `REDIS_URL` | URL Redis | `redis://redis:6379/0` |
 | `REDIS_KEY_PREFIX` | Préfixe des clés | `secure-api-gateway` |
-| `REDIS_CONNECT_TIMEOUT_SECONDS` | Timeout de connexion | `2` |
-| `REDIS_SOCKET_TIMEOUT_SECONDS` | Timeout des opérations | `2` |
+| `REDIS_CONNECT_TIMEOUT_SECONDS` | Timeout connexion | `2` |
+| `REDIS_SOCKET_TIMEOUT_SECONDS` | Timeout opérations | `2` |
 | `REDIS_MAX_CONNECTIONS` | Taille maximale du pool | `20` |
-| `REDIS_HEALTH_CHECK_INTERVAL_SECONDS` | Intervalle de contrôle | `30` |
-| `REDIS_VERIFY_ON_STARTUP` | Vérification au démarrage | `false` |
+| `REDIS_VERIFY_ON_STARTUP` | Vérification au démarrage Docker | `true` |
 
-Docker Compose force la vérification Redis au démarrage de la
-Gateway.
+Variables PostgreSQL :
+
+| Variable | Description | Défaut |
+|---|---|---|
+| `POSTGRES_DB` | Base PostgreSQL | `gateway` |
+| `POSTGRES_USER` | Utilisateur PostgreSQL | `gateway` |
+| `POSTGRES_PASSWORD` | Mot de passe PostgreSQL | obligatoire |
+| `DATABASE_POOL_SIZE` | Taille du pool SQLAlchemy | `5` |
+| `DATABASE_MAX_OVERFLOW` | Connexions supplémentaires | `10` |
+| `DATABASE_POOL_TIMEOUT_SECONDS` | Timeout du pool | `5` |
+| `DATABASE_CONNECT_TIMEOUT_SECONDS` | Timeout de connexion | `5` |
+| `DATABASE_VERIFY_ON_STARTUP` | Test DB au démarrage | Docker : `true` |
+| `DATABASE_APPLICATION_NAME` | Nom PostgreSQL de l'application | `secure-api-gateway` |
 
 ## Démarrage
 
+Démarrer le stack :
+
     docker compose up --build -d
 
-Vérifier les services :
+Vérifier :
 
     docker compose ps
 
-Les quatre services doivent être `healthy` :
+Les cinq services doivent être healthy :
 
 - `gateway` ;
+- `postgres` ;
 - `redis` ;
 - `service-a` ;
 - `service-b`.
 
 Consulter les logs :
 
-    docker compose logs --tail=100 gateway redis
+    docker compose logs \
+      --tail=100 \
+      gateway postgres redis
 
-Arrêter l'environnement :
+Arrêter l'environnement sans supprimer les données PostgreSQL :
 
     docker compose down
+
+Attention :
+
+    docker compose down -v
+
+supprime également le volume PostgreSQL et ne doit être utilisé
+que lorsqu'une suppression volontaire des données est souhaitée.
 
 ## Endpoints
 
@@ -214,28 +527,10 @@ Arrêter l'environnement :
     POST /auth/register
     Content-Type: application/json
 
-Exemple :
-
-    curl -X POST \
-      http://127.0.0.1:8000/auth/register \
-      -H 'Content-Type: application/json' \
-      -d '{
-        "username": "anas",
-        "password": "correct-horse-battery-staple"
-      }'
-
 ### Authentification
 
     POST /auth/token
     Content-Type: application/x-www-form-urlencoded
-
-Exemple :
-
-    curl -X POST \
-      http://127.0.0.1:8000/auth/token \
-      -H 'Content-Type: application/x-www-form-urlencoded' \
-      --data-urlencode 'username=anas' \
-      --data-urlencode 'password=correct-horse-battery-staple'
 
 ### Profil courant
 
@@ -248,16 +543,6 @@ Exemple :
     ANY /api/{service_name}/{path}
     Authorization: Bearer <token>
 
-Exemple :
-
-    curl \
-      http://127.0.0.1:8000/api/service-a/ping \
-      -H 'Authorization: Bearer <token>'
-
-Les routes proxy génériques sont volontairement exclues du schéma
-OpenAPI, car elles acceptent plusieurs méthodes et leurs contrats
-dépendent du microservice ciblé.
-
 ## Documentation interactive
 
 Lorsque la Gateway fonctionne :
@@ -266,6 +551,11 @@ Lorsque la Gateway fonctionne :
 - ReDoc : `http://127.0.0.1:8000/redoc`
 - OpenAPI : `http://127.0.0.1:8000/openapi.json`
 
+Le schéma OpenAPI expose les routes explicites
+d'authentification et de santé.
+
+Les routes proxy génériques sont exclues volontairement.
+
 ## Tests
 
 Créer l'environnement Python :
@@ -273,31 +563,49 @@ Créer l'environnement Python :
     python -m venv venv
     source venv/bin/activate
 
-Installer les dépendances :
+Installer :
 
-    python -m pip install --requirement requirements.txt
+    python -m pip install \
+      --requirement requirements.txt
 
-Exécuter toute la suite :
+Exécuter :
 
     python -m pytest -q
 
-État validé de la Phase 3 :
+État validé de la Phase 4 :
 
-    221 passed, 1 warning
+    298 passed, 1 warning
 
-L'avertissement restant vient de l'intégration Starlette TestClient
-et n'indique pas un échec fonctionnel.
+Le warning restant provient de l'intégration actuelle entre
+Starlette TestClient et httpx et n'indique pas un échec
+fonctionnel du projet.
 
 ## Contrôles utiles
 
-Validation Compose :
+Validation Docker Compose sans révéler les secrets :
 
     docker compose config --quiet
+
+Ne pas utiliser `docker compose config` dans des captures ou
+logs publics car les variables peuvent être résolues.
 
 Contrôle Git :
 
     git diff --check
     git status --short
+
+Vérifier que `.env` est ignoré :
+
+    git check-ignore -v .env
+
+Contrôler les migrations :
+
+    docker compose \
+      --profile tools \
+      run \
+      --rm \
+      migrate \
+      alembic check
 
 Inspection des clés Redis :
 
@@ -305,17 +613,18 @@ Inspection des clés Redis :
       redis-cli --scan \
       --pattern 'secure-api-gateway:*'
 
-Les noms d'utilisateur, UUID et adresses IP ne doivent pas apparaître
-en clair dans les clés Redis.
+Les noms d'utilisateur, UUID et adresses IP ne doivent pas
+apparaître en clair dans les clés Redis.
 
 ## Limites actuelles
 
-- les utilisateurs sont conservés en mémoire ;
-- les utilisateurs sont perdus au redémarrage de la Gateway ;
-- Redis n'utilise pas de persistance disque ;
-- Redis conserve uniquement des états temporaires de sécurité ;
-- la prochaine évolution prévue est PostgreSQL pour les utilisateurs
-  et les événements d'audit.
+- `/health` représente actuellement uniquement la liveness ;
+- aucune route de readiness complète n'est encore exposée ;
+- Redis ne possède volontairement aucune persistance disque ;
+- le contrôle d'accès fin RBAC n'est pas encore implémenté ;
+- les événements d'audit persistants feront partie d'une phase
+  ultérieure ;
+- le déploiement CI/CD n'est pas encore finalisé.
 
 ## Licence
 

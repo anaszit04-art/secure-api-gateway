@@ -44,7 +44,7 @@ class FakeAuthenticationService:
             tuple[str, str]
         ] = []
 
-    def authenticate_and_create_token(
+    async def authenticate_and_create_token(
         self,
         *,
         username: str,

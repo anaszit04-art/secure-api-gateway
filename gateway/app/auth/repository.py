@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from dataclasses import replace
 from datetime import datetime, timezone
 from threading import RLock
+from typing import Protocol, cast
 from uuid import uuid4
 
 from gateway.app.auth.models import (
@@ -17,12 +20,59 @@ class UserNotFoundError(LookupError):
     """Raised when a requested user does not exist."""
 
 
+class UserRepositoryBackendError(RuntimeError):
+    """
+    Raised when the user persistence backend cannot
+    complete an operation.
+
+    The exception intentionally exposes no database
+    implementation detail to higher layers.
+    """
+
+
+class UserRepository(Protocol):
+    """
+    Asynchronous persistence contract used by the
+    authentication domain service.
+
+    Implementations may use PostgreSQL or an adapter
+    around an in-memory repository.
+    """
+
+    async def create_user(
+        self,
+        *,
+        username: str,
+        hashed_password: str,
+    ) -> StoredUser:
+        ...
+
+    async def get_by_username(
+        self,
+        username: str,
+    ) -> StoredUser | None:
+        ...
+
+    async def update_password_hash(
+        self,
+        *,
+        username: str,
+        hashed_password: str,
+    ) -> StoredUser:
+        ...
+
+    async def count(
+        self,
+    ) -> int:
+        ...
+
+
 class InMemoryUserRepository:
     """
-    Thread-safe in-memory user repository.
+    Thread-safe synchronous in-memory user repository.
 
-    This repository is suitable for development and tests.
-    It will later be replaced by a PostgreSQL repository.
+    It remains useful for focused unit tests. Application
+    services consume it through AsyncInMemoryUserRepository.
     """
 
     def __init__(self) -> None:
@@ -129,3 +179,83 @@ class InMemoryUserRepository:
             return len(
                 self._users_by_username
             )
+
+
+class AsyncInMemoryUserRepository:
+    """
+    Async adapter around the synchronous in-memory
+    repository.
+
+    In-memory operations are extremely short and contain
+    no external I/O, therefore delegation can remain
+    directly in-process.
+    """
+
+    def __init__(
+        self,
+        repository: InMemoryUserRepository,
+    ) -> None:
+        self._repository = repository
+
+    async def create_user(
+        self,
+        *,
+        username: str,
+        hashed_password: str,
+    ) -> StoredUser:
+        return self._repository.create_user(
+            username=username,
+            hashed_password=hashed_password,
+        )
+
+    async def get_by_username(
+        self,
+        username: str,
+    ) -> StoredUser | None:
+        return self._repository.get_by_username(
+            username
+        )
+
+    async def update_password_hash(
+        self,
+        *,
+        username: str,
+        hashed_password: str,
+    ) -> StoredUser:
+        return self._repository.update_password_hash(
+            username=username,
+            hashed_password=hashed_password,
+        )
+
+    async def count(
+        self,
+    ) -> int:
+        return self._repository.count()
+
+
+def adapt_user_repository(
+    repository: (
+        UserRepository
+        | InMemoryUserRepository
+    ),
+) -> UserRepository:
+    """
+    Adapt legacy synchronous in-memory repositories to
+    the asynchronous authentication contract.
+
+    PostgreSQL repositories already satisfy the protocol
+    and are returned unchanged.
+    """
+
+    if isinstance(
+        repository,
+        InMemoryUserRepository,
+    ):
+        return AsyncInMemoryUserRepository(
+            repository
+        )
+
+    return cast(
+        UserRepository,
+        repository,
+    )
