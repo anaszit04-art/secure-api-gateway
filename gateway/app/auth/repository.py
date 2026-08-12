@@ -20,6 +20,16 @@ class UserNotFoundError(LookupError):
     """Raised when a requested user does not exist."""
 
 
+class UserRepositoryBackendError(RuntimeError):
+    """
+    Raised when the user persistence backend cannot
+    complete an operation.
+
+    The exception intentionally exposes no database
+    implementation detail to higher layers.
+    """
+
+
 class UserRepository(Protocol):
     """
     Asynchronous persistence contract used by the

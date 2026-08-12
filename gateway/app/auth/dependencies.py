@@ -24,6 +24,7 @@ from gateway.app.auth.repository import (
     AsyncInMemoryUserRepository,
     InMemoryUserRepository,
     UserRepository,
+    UserRepositoryBackendError,
     adapt_user_repository,
 )
 from gateway.app.auth.service import (
@@ -110,6 +111,26 @@ def get_authentication_service(
     )
 
 
+def authentication_database_unavailable() -> HTTPException:
+    """
+    Return a stable fail-closed response when persistent
+    authentication storage cannot be reached.
+    """
+
+    return HTTPException(
+        status_code=(
+            status.HTTP_503_SERVICE_UNAVAILABLE
+        ),
+        detail=(
+            "Authentication database is "
+            "temporarily unavailable."
+        ),
+        headers={
+            "Retry-After": "1",
+        },
+    )
+
+
 def unauthorized_exception() -> HTTPException:
     """
     Build a consistent OAuth2 authentication error.
@@ -160,6 +181,11 @@ async def get_current_user(
                 claims.subject
             )
         )
+
+    except UserRepositoryBackendError as exc:
+        raise (
+            authentication_database_unavailable()
+        ) from exc
 
     except (
         TokenValidationError,

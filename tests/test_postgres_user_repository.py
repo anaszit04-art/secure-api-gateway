@@ -15,6 +15,7 @@ from sqlalchemy.exc import (
 from gateway.app.auth.repository import (
     UserAlreadyExistsError,
     UserNotFoundError,
+    UserRepositoryBackendError,
 )
 from gateway.app.database.models import (
     UserRecord,
@@ -327,7 +328,7 @@ async def test_create_user_rolls_back_duplicate() -> None:
 
 
 @pytest.mark.anyio
-async def test_create_user_reraises_other_integrity_errors() -> None:
+async def test_create_user_translates_other_integrity_errors() -> None:
     error = make_integrity_error(
         "23502"
     )
@@ -345,15 +346,23 @@ async def test_create_user_reraises_other_integrity_errors() -> None:
     )
 
     with pytest.raises(
-        IntegrityError
+        UserRepositoryBackendError,
+        match=(
+            "User persistence backend "
+            "is unavailable"
+        ),
     ) as captured:
         await repository.create_user(
             username="anas",
             hashed_password=VALID_HASH,
         )
 
-    assert captured.value is error
     assert session.rolled_back is True
+
+    assert (
+        captured.value.__cause__
+        is error
+    )
 
 
 @pytest.mark.anyio

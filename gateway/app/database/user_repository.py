@@ -4,6 +4,7 @@ from datetime import (
     datetime,
     timezone,
 )
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -12,6 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import (
     IntegrityError,
+    SQLAlchemyError,
 )
 
 from gateway.app.auth.models import (
@@ -21,6 +23,7 @@ from gateway.app.auth.models import (
 from gateway.app.auth.repository import (
     UserAlreadyExistsError,
     UserNotFoundError,
+    UserRepositoryBackendError,
 )
 from gateway.app.database.client import (
     DatabaseSessionFactory,
@@ -32,6 +35,10 @@ from gateway.app.database.models import (
 
 UNIQUE_VIOLATION_SQLSTATE = "23505"
 
+BACKEND_ERROR_MESSAGE = (
+    "User persistence backend is unavailable."
+)
+
 
 def record_to_stored_user(
     record: UserRecord,
@@ -40,6 +47,7 @@ def record_to_stored_user(
     Convert the persistence model into the
     authentication domain representation.
     """
+
     return StoredUser(
         id=record.id,
         username=record.username,
@@ -55,8 +63,8 @@ def is_unique_violation(
     exception: IntegrityError,
 ) -> bool:
     """
-    Detect a PostgreSQL unique-constraint violation
-    without depending on a single asyncpg wrapper layer.
+    Detect a PostgreSQL unique violation through the
+    SQLAlchemy / asyncpg exception chain.
     """
 
     candidates = (
@@ -99,13 +107,44 @@ def is_unique_violation(
     return False
 
 
+async def rollback_quietly(
+    session: Any,
+) -> None:
+    """
+    Best-effort rollback.
+
+    A broken database connection must not replace the
+    original persistence exception with a rollback error.
+    """
+
+    try:
+        await session.rollback()
+    except (
+        SQLAlchemyError,
+        OSError,
+    ):
+        return
+
+
+def backend_error(
+    exception: BaseException,
+) -> UserRepositoryBackendError:
+    """
+    Convert infrastructure failures into the stable
+    authentication repository error contract.
+    """
+
+    return UserRepositoryBackendError(
+        BACKEND_ERROR_MESSAGE
+    )
+
+
 class PostgreSQLUserRepository:
     """
     Asynchronous PostgreSQL-backed user repository.
 
-    Each operation owns a short-lived AsyncSession while
-    the shared SQLAlchemy engine/pool lives for the
-    lifetime of the FastAPI process.
+    Database implementation exceptions never cross this
+    persistence boundary.
     """
 
     def __init__(
@@ -150,30 +189,62 @@ class PostgreSQLUserRepository:
             updated_at=now,
         )
 
-        async with (
-            self._session_factory()
-            as session
-        ):
-            session.add(
-                record
-            )
+        try:
+            async with (
+                self._session_factory()
+                as session
+            ):
+                session.add(
+                    record
+                )
 
-            try:
-                await session.commit()
-            except IntegrityError as exc:
-                await session.rollback()
+                try:
+                    await session.commit()
 
-                if is_unique_violation(
-                    exc
-                ):
-                    raise (
-                        UserAlreadyExistsError(
-                            "Username is already "
-                            "registered."
-                        )
+                except IntegrityError as exc:
+                    await rollback_quietly(
+                        session
+                    )
+
+                    if is_unique_violation(
+                        exc
+                    ):
+                        raise (
+                            UserAlreadyExistsError(
+                                "Username is already "
+                                "registered."
+                            )
+                        ) from exc
+
+                    raise backend_error(
+                        exc
                     ) from exc
 
-                raise
+                except (
+                    SQLAlchemyError,
+                    OSError,
+                ) as exc:
+                    await rollback_quietly(
+                        session
+                    )
+
+                    raise backend_error(
+                        exc
+                    ) from exc
+
+        except (
+            UserAlreadyExistsError,
+            UserRepositoryBackendError,
+        ):
+            raise
+
+        except (
+            SQLAlchemyError,
+            OSError,
+        ) as exc:
+            raise backend_error(
+                exc
+            ) from exc
 
         return record_to_stored_user(
             record
@@ -199,17 +270,28 @@ class PostgreSQLUserRepository:
             )
         )
 
-        async with (
-            self._session_factory()
-            as session
-        ):
-            result = await session.execute(
-                statement
-            )
+        try:
+            async with (
+                self._session_factory()
+                as session
+            ):
+                result = (
+                    await session.execute(
+                        statement
+                    )
+                )
 
-            record = (
-                result.scalar_one_or_none()
-            )
+                record = (
+                    result.scalar_one_or_none()
+                )
+
+        except (
+            SQLAlchemyError,
+            OSError,
+        ) as exc:
+            raise backend_error(
+                exc
+            ) from exc
 
         if record is None:
             return None
@@ -245,28 +327,58 @@ class PostgreSQLUserRepository:
             )
         )
 
-        async with (
-            self._session_factory()
-            as session
-        ):
-            result = await session.execute(
-                statement
-            )
-
-            record = (
-                result.scalar_one_or_none()
-            )
-
-            if record is None:
-                raise UserNotFoundError(
-                    "User not found."
+        try:
+            async with (
+                self._session_factory()
+                as session
+            ):
+                result = (
+                    await session.execute(
+                        statement
+                    )
                 )
 
-            record.hashed_password = (
-                hashed_password
-            )
+                record = (
+                    result.scalar_one_or_none()
+                )
 
-            await session.commit()
+                if record is None:
+                    raise UserNotFoundError(
+                        "User not found."
+                    )
+
+                record.hashed_password = (
+                    hashed_password
+                )
+
+                try:
+                    await session.commit()
+
+                except (
+                    SQLAlchemyError,
+                    OSError,
+                ) as exc:
+                    await rollback_quietly(
+                        session
+                    )
+
+                    raise backend_error(
+                        exc
+                    ) from exc
+
+        except (
+            UserNotFoundError,
+            UserRepositoryBackendError,
+        ):
+            raise
+
+        except (
+            SQLAlchemyError,
+            OSError,
+        ) as exc:
+            raise backend_error(
+                exc
+            ) from exc
 
         return record_to_stored_user(
             record
@@ -284,14 +396,25 @@ class PostgreSQLUserRepository:
             )
         )
 
-        async with (
-            self._session_factory()
-            as session
-        ):
-            result = await session.execute(
-                statement
-            )
+        try:
+            async with (
+                self._session_factory()
+                as session
+            ):
+                result = (
+                    await session.execute(
+                        statement
+                    )
+                )
 
-            return int(
-                result.scalar_one()
-            )
+                return int(
+                    result.scalar_one()
+                )
+
+        except (
+            SQLAlchemyError,
+            OSError,
+        ) as exc:
+            raise backend_error(
+                exc
+            ) from exc
