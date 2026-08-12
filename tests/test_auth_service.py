@@ -55,10 +55,10 @@ def auth_system(
     return repository, service
 
 
-def register_default_user(
+async def register_default_user(
     service: AuthenticationService,
 ) -> None:
-    service.register_user(
+    await service.register_user(
         UserRegistration(
             username="Anas",
             password=VALID_PASSWORD,
@@ -66,7 +66,8 @@ def register_default_user(
     )
 
 
-def test_register_user_hashes_password(
+@pytest.mark.anyio
+async def test_register_user_hashes_password(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -74,7 +75,7 @@ def test_register_user_hashes_password(
 ) -> None:
     repository, service = auth_system
 
-    public_user = service.register_user(
+    public_user = await service.register_user(
         UserRegistration(
             username=" Anas ",
             password=VALID_PASSWORD,
@@ -104,7 +105,8 @@ def test_register_user_hashes_password(
     )
 
 
-def test_register_user_rejects_duplicate_username(
+@pytest.mark.anyio
+async def test_register_user_rejects_duplicate_username(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -112,12 +114,14 @@ def test_register_user_rejects_duplicate_username(
 ) -> None:
     _, service = auth_system
 
-    register_default_user(service)
+    await register_default_user(
+        service
+    )
 
     with pytest.raises(
         UserAlreadyExistsError,
     ):
-        service.register_user(
+        await service.register_user(
             UserRegistration(
                 username=" ANAS ",
                 password=VALID_PASSWORD,
@@ -125,7 +129,8 @@ def test_register_user_rejects_duplicate_username(
         )
 
 
-def test_authenticate_user_accepts_valid_credentials(
+@pytest.mark.anyio
+async def test_authenticate_user_accepts_valid_credentials(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -133,19 +138,25 @@ def test_authenticate_user_accepts_valid_credentials(
 ) -> None:
     _, service = auth_system
 
-    register_default_user(service)
+    await register_default_user(
+        service
+    )
 
     authenticated_user = (
-        service.authenticate_user(
+        await service.authenticate_user(
             username=" ANAS ",
             password=VALID_PASSWORD,
         )
     )
 
-    assert authenticated_user.username == "anas"
+    assert (
+        authenticated_user.username
+        == "anas"
+    )
 
 
-def test_authenticate_user_rejects_wrong_password(
+@pytest.mark.anyio
+async def test_authenticate_user_rejects_wrong_password(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -153,19 +164,24 @@ def test_authenticate_user_rejects_wrong_password(
 ) -> None:
     _, service = auth_system
 
-    register_default_user(service)
+    await register_default_user(
+        service
+    )
 
     with pytest.raises(
         AuthenticationError,
         match=INVALID_CREDENTIALS_MESSAGE,
     ):
-        service.authenticate_user(
+        await service.authenticate_user(
             username="anas",
-            password="incorrect-password-value",
+            password=(
+                "incorrect-password-value"
+            ),
         )
 
 
-def test_authenticate_unknown_user_uses_dummy_hash(
+@pytest.mark.anyio
+async def test_authenticate_unknown_user_uses_dummy_hash(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -200,7 +216,7 @@ def test_authenticate_unknown_user_uses_dummy_hash(
         AuthenticationError,
         match=INVALID_CREDENTIALS_MESSAGE,
     ):
-        service.authenticate_user(
+        await service.authenticate_user(
             username="unknown-user",
             password="any-password-value",
         )
@@ -213,7 +229,8 @@ def test_authenticate_unknown_user_uses_dummy_hash(
     ]
 
 
-def test_authenticate_rejects_malformed_username(
+@pytest.mark.anyio
+async def test_authenticate_rejects_malformed_username(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -225,13 +242,14 @@ def test_authenticate_rejects_malformed_username(
         AuthenticationError,
         match=INVALID_CREDENTIALS_MESSAGE,
     ):
-        service.authenticate_user(
+        await service.authenticate_user(
             username="**",
             password="any-password-value",
         )
 
 
-def test_authentication_updates_outdated_hash(
+@pytest.mark.anyio
+async def test_authentication_updates_outdated_hash(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -240,7 +258,9 @@ def test_authentication_updates_outdated_hash(
 ) -> None:
     repository, service = auth_system
 
-    register_default_user(service)
+    await register_default_user(
+        service
+    )
 
     monkeypatch.setattr(
         (
@@ -254,7 +274,7 @@ def test_authentication_updates_outdated_hash(
     )
 
     authenticated_user = (
-        service.authenticate_user(
+        await service.authenticate_user(
             username="anas",
             password=VALID_PASSWORD,
         )
@@ -277,7 +297,8 @@ def test_authentication_updates_outdated_hash(
     )
 
 
-def test_authentication_rejects_inactive_user(
+@pytest.mark.anyio
+async def test_authentication_rejects_inactive_user(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -285,7 +306,9 @@ def test_authentication_rejects_inactive_user(
 ) -> None:
     repository, service = auth_system
 
-    register_default_user(service)
+    await register_default_user(
+        service
+    )
 
     stored_user = repository.get_by_username(
         "anas"
@@ -304,13 +327,14 @@ def test_authentication_rejects_inactive_user(
         AuthenticationError,
         match=INVALID_CREDENTIALS_MESSAGE,
     ):
-        service.authenticate_user(
+        await service.authenticate_user(
             username="anas",
             password=VALID_PASSWORD,
         )
 
 
-def test_authenticate_and_create_token(
+@pytest.mark.anyio
+async def test_authenticate_and_create_token(
     auth_system: tuple[
         InMemoryUserRepository,
         AuthenticationService,
@@ -319,11 +343,16 @@ def test_authenticate_and_create_token(
 ) -> None:
     _, service = auth_system
 
-    register_default_user(service)
+    await register_default_user(
+        service
+    )
 
-    token = service.authenticate_and_create_token(
-        username="anas",
-        password=VALID_PASSWORD,
+    token = (
+        await service
+        .authenticate_and_create_token(
+            username="anas",
+            password=VALID_PASSWORD,
+        )
     )
 
     claims = decode_access_token(

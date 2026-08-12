@@ -60,7 +60,7 @@ router = APIRouter(
     response_model=UserPublic,
     status_code=status.HTTP_201_CREATED,
 )
-def register_user(
+async def register_user(
     registration: UserRegistration,
     service: Annotated[
         AuthenticationService,
@@ -72,7 +72,7 @@ def register_user(
     """
 
     try:
-        return service.register_user(
+        return await service.register_user(
             registration
         )
     except UserAlreadyExistsError as exc:
@@ -146,7 +146,7 @@ async def issue_access_token(
 
     try:
         access_token = (
-            service.authenticate_and_create_token(
+            await service.authenticate_and_create_token(
                 username=form_data.username,
                 password=form_data.password,
             )
