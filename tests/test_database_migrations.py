@@ -32,9 +32,31 @@ def test_alembic_has_single_initial_head() -> None:
 def test_initial_revision_has_no_parent() -> None:
     scripts = load_scripts()
 
+    base_revisions = [
+        revision
+        for revision
+        in scripts.walk_revisions()
+        if revision.down_revision is None
+    ]
+
+    assert len(base_revisions) == 1
+
+    initial_revision = (
+        base_revisions[0]
+    )
+
+    assert (
+        initial_revision.revision
+        == "1cc279e452ed"
+    )
+
+
+def test_rbac_revision_follows_initial_revision() -> None:
+    scripts = load_scripts()
+
     head = scripts.get_current_head()
 
-    assert head is not None
+    assert head == "b04e170d1c97"
 
     revision = scripts.get_revision(
         head
@@ -44,7 +66,7 @@ def test_initial_revision_has_no_parent() -> None:
 
     assert (
         revision.down_revision
-        is None
+        == "1cc279e452ed"
     )
 
 
