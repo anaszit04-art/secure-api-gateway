@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from typing import Final
 from uuid import UUID
 
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+)
+
 
 MAXIMUM_ROLE_NAME_LENGTH: Final[int] = 64
 MAXIMUM_PERMISSION_CODE_LENGTH: Final[int] = 128
@@ -177,3 +182,35 @@ class StoredPermission:
     id: UUID
     code: str
     description: str
+
+
+class UserRolesResponse(BaseModel):
+    """
+    Safe public representation of the roles currently
+    assigned to a user.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    user_id: UUID
+    username: str
+    roles: tuple[str, ...]
+
+
+class RoleMutationResponse(BaseModel):
+    """
+    Result returned after a role assignment or removal.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    user_id: UUID
+    username: str
+    role: str
+    changed: bool

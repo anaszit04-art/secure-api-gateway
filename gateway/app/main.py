@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from gateway.app.auth.router import (
     router as auth_router,
 )
+from gateway.app.authorization.router import (
+    router as authorization_router,
+)
 from gateway.app.database.client import (
     close_database_engine,
     create_database_engine,
@@ -170,6 +173,7 @@ app = FastAPI(
 )
 
 app.include_router(auth_router)
+app.include_router(authorization_router)
 app.include_router(proxy_router)
 
 
