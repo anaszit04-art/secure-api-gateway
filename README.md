@@ -3,66 +3,115 @@
 API Gateway sécurisée développée avec FastAPI, JWT, Redis,
 PostgreSQL, SQLAlchemy, Alembic et Docker.
 
-Le projet centralise l'authentification, la persistance des
-utilisateurs, la limitation de débit, la protection
-anti-brute-force et le routage vers des microservices internes.
+Le projet centralise l'authentification, l'autorisation RBAC,
+la persistance des utilisateurs, la limitation de débit, la
+protection anti-brute-force et le routage Zero Trust vers des
+microservices internes.
+
+Version applicative validée :
+
+    0.5.0
+
+Image applicative Docker :
+
+    secure-api-gateway:phase5
 
 ## État du projet
 
-Phase 4 terminée :
+Phase 5 terminée techniquement :
 
 - authentification JWT ;
 - persistance PostgreSQL des utilisateurs ;
 - accès asynchrone SQLAlchemy + asyncpg ;
 - migrations Alembic ;
-- reverse proxy authentifié ;
+- autorisation RBAC persistante PostgreSQL ;
+- rôles `user`, `operator` et `admin` ;
+- permissions fines par service et méthode HTTP ;
+- stratégie Zero Trust sur le reverse proxy ;
+- administration sécurisée des rôles ;
+- révocation de privilège effective avec le même JWT ;
+- protection contre le spoofing de rôles et permissions ;
 - rate limiting Redis distribué ;
 - protection anti-brute-force ;
 - verrouillage temporaire des comptes ;
 - limitation des connexions par adresse IP ;
 - stratégie fail-closed Redis et PostgreSQL ;
-- persistance validée après reconstruction des conteneurs ;
+- persistance validée après redémarrage des conteneurs ;
+- récupération PostgreSQL validée sans renouveler le JWT ;
 - durcissement Docker ;
-- 298 tests automatisés réussis.
+- uniquement la Gateway publiée sur l'hôte ;
+- 377 tests automatisés réussis.
+
+État de validation :
+
+    377 passed, 1 warning
 
 ## Architecture
+
+Architecture de confiance Phase 5 :
 
     Client HTTP
          |
          | 127.0.0.1:8000
          v
     FastAPI Gateway
-      |
-      +-- JWT
-      |
-      +-- AuthenticationService async
-      |       |
-      |       v
-      |   UserRepository
-      |       |
-      |       v
-      |   PostgreSQLUserRepository
-      |       |
-      |       v
-      |   SQLAlchemy AsyncSession
-      |       |
-      |       v
-      |     asyncpg
-      |       |
-      |       v
-      |   PostgreSQL
-      |
-      +-- Redis
-      |    |
-      |    +-- Rate limiting
-      |    |
-      |    +-- Anti-brute-force
-      |
-      +-- Reverse proxy
-           |
-           +-- Service A
-           |
-           +-- Service B
+         |
+         +-------------------------------+
+         |                               |
+         v                               v
+    Authentification                 Redis
+         |                               |
+         |                               +-- Rate limiting
+         |                               |
+         |                               +-- Anti-brute-force
+         |
+         v
+    JWT signé et validé
+         |
+         v
+    Rechargement utilisateur
+    depuis PostgreSQL
+         |
+         v
+    AuthorizationService
+         |
+         v
+    RBAC PostgreSQL
+         |
+         +-- users
+         +-- roles
+         +-- permissions
+         +-- user_roles
+         +-- role_permissions
+         |
+         v
+    Policy Zero Trust
+         |
+         +-- service-a read/write
+         |
+         +-- service-b read/write
+         |
+         +-- administration des rôles
+         |
+         v
+    Reverse Proxy
+         |
+         +-- Service A
+         |
+         +-- Service B
+
+Principe de sécurité :
+
+    JWT valide
+        ≠
+    autorisation suffisante
+
+L'identité est rechargée depuis PostgreSQL à chaque requête
+protégée et les permissions courantes sont également évaluées
+depuis PostgreSQL.
+
+Les claims client tels que `role` ou `permissions` ne constituent
+jamais une source d'autorité.
 
 Seule la Gateway est publiée sur la machine hôte :
 
@@ -71,21 +120,35 @@ Seule la Gateway est publiée sur la machine hôte :
 PostgreSQL, Redis et les microservices restent uniquement
 accessibles depuis le réseau Docker interne.
 
-Les migrations SQL sont gérées par Alembic :
+Chaîne de migrations :
 
     Alembic
        |
        v
     1cc279e452ed
        |
+       | create users
        v
+    b04e170d1c97
+       |
+       | add RBAC authorization schema
+       v
+    HEAD
+
+Tables persistantes principales :
+
     users
+    roles
+    permissions
+    user_roles
+    role_permissions
 
 ## Structure du projet
 
     gateway/
     └── app/
         ├── auth/
+        ├── authorization/
         ├── database/
         ├── proxy/
         ├── rate_limit/
@@ -164,11 +227,28 @@ validées :
 
 ### Migrations Alembic
 
-La migration initiale est :
+La première migration est :
 
     1cc279e452ed
 
-Elle crée la table `users`.
+Elle crée la table :
+
+    users
+
+La migration RBAC Phase 5 est :
+
+    b04e170d1c97
+
+Elle crée :
+
+    roles
+    permissions
+    user_roles
+    role_permissions
+
+Elle initialise également les rôles système et leurs permissions,
+puis attribue le rôle `user` aux utilisateurs existants lors de
+l'upgrade.
 
 Appliquer les migrations :
 
@@ -208,9 +288,13 @@ Détecter une dérive ORM / migration :
 
 État validé :
 
-    1cc279e452ed (head)
+    b04e170d1c97 (head)
 
     No new upgrade operations detected.
+
+La migration downgrade/upgrade a également été testée avec
+conservation des utilisateurs existants et réattribution du rôle
+par défaut.
 
 ### Résilience PostgreSQL
 
@@ -283,19 +367,129 @@ Après reconstruction complète du stack :
 
 ### Reverse proxy
 
-Les routes `/api/*` nécessitent un JWT valide et un utilisateur
-actif chargé depuis PostgreSQL.
+Les routes `/api/*` nécessitent :
 
-La Gateway transfère les requêtes vers les services enregistrés
-tout en filtrant les headers sensibles.
+1. un JWT valide ;
+2. un utilisateur actif rechargé depuis PostgreSQL ;
+3. une permission RBAC courante chargée depuis PostgreSQL.
 
 Services disponibles :
 
 - `service-a` ;
 - `service-b`.
 
-Les routes génériques du proxy sont volontairement exclues du
-schéma OpenAPI.
+La politique d'autorisation est dérivée exclusivement des
+informations de routage fiables de la Gateway.
+
+Méthodes de lecture :
+
+    GET
+    HEAD
+    OPTIONS
+
+requièrent :
+
+    proxy:<service>:read
+
+Méthodes de modification :
+
+    POST
+    PUT
+    PATCH
+    DELETE
+
+requièrent :
+
+    proxy:<service>:write
+
+Toute méthode non classifiée est refusée par défaut.
+
+Un service inconnu est également rejeté avant tout appel
+upstream.
+
+Les routes génériques du proxy restent volontairement exclues
+du schéma OpenAPI.
+
+La Gateway filtre les headers réseau spoofables ainsi que les
+headers de privilège tels que :
+
+    X-Role
+    X-User-Role
+    X-Permission
+    X-Authorization-Role
+
+### Autorisation RBAC et Zero Trust
+
+Le modèle RBAC persistant utilise :
+
+    users
+      |
+      +-- user_roles
+              |
+              v
+            roles
+              |
+              +-- role_permissions
+                       |
+                       v
+                  permissions
+
+Rôles système :
+
+| Rôle | Service A | Service B | Administration RBAC |
+|---|---|---|---|
+| `user` | lecture | lecture | aucune |
+| `operator` | lecture + écriture | lecture + écriture | aucune |
+| `admin` | lecture + écriture | lecture + écriture | lecture + gestion |
+
+Permissions persistantes :
+
+    proxy:service-a:read
+    proxy:service-a:write
+    proxy:service-b:read
+    proxy:service-b:write
+    authorization:roles:read
+    authorization:roles:manage
+
+Un utilisateur créé via `/auth/register` reçoit automatiquement
+le rôle minimal `user`.
+
+Le payload d'inscription interdit les champs supplémentaires :
+un client ne peut donc pas demander lui-même `role=admin`.
+
+L'administration des rôles nécessite les permissions
+`authorization:roles:read` ou
+`authorization:roles:manage`.
+
+La base PostgreSQL est la source d'autorité.
+
+Conséquence :
+
+    même JWT
+       |
+       +-- ajout operator
+       |       |
+       |       v
+       |    écriture autorisée
+       |
+       +-- suppression operator
+               |
+               v
+            écriture immédiatement refusée
+
+Aucune réémission du JWT n'est nécessaire pour appliquer une
+révocation.
+
+Tests de sécurité validés :
+
+- self-promotion d'un utilisateur normal : HTTP 403 ;
+- injection de rôle à l'inscription : rejetée ;
+- claims JWT `role` / `permissions` forgés : sans effet ;
+- headers RBAC spoofés : sans effet ;
+- headers RBAC spoofés non transmis aux services internes ;
+- autorisation refusée : aucun appel upstream ;
+- backend d'autorisation indisponible : HTTP 503 fail-closed ;
+- méthode HTTP non reconnue : refus par défaut.
 
 ### Rate limiting Redis
 
@@ -527,6 +721,8 @@ que lorsqu'une suppression volontaire des données est souhaitée.
     POST /auth/register
     Content-Type: application/json
 
+Un utilisateur nouvellement inscrit reçoit le rôle `user`.
+
 ### Authentification
 
     POST /auth/token
@@ -537,11 +733,47 @@ que lorsqu'une suppression volontaire des données est souhaitée.
     GET /auth/me
     Authorization: Bearer <token>
 
+### Administration RBAC
+
+Lecture des rôles d'un utilisateur :
+
+    GET /authorization/users/{username}/roles
+    Authorization: Bearer <token>
+
+Attribution d'un rôle :
+
+    PUT /authorization/users/{username}/roles/{role_name}
+    Authorization: Bearer <token>
+
+Suppression d'un rôle :
+
+    DELETE /authorization/users/{username}/roles/{role_name}
+    Authorization: Bearer <token>
+
+Ces routes sont protégées par les permissions
+`authorization:roles:read` et
+`authorization:roles:manage`.
+
 ### Reverse proxy
 
-    ANY /api/{service_name}
-    ANY /api/{service_name}/{path}
+    /api/{service_name}
+    /api/{service_name}/{path}
+
+Méthodes explicitement supportées :
+
+    GET
+    HEAD
+    OPTIONS
+    POST
+    PUT
+    PATCH
+    DELETE
+
+Chaque requête nécessite :
+
     Authorization: Bearer <token>
+
+puis une permission RBAC adaptée au service et à la méthode.
 
 ## Documentation interactive
 
@@ -551,10 +783,17 @@ Lorsque la Gateway fonctionne :
 - ReDoc : `http://127.0.0.1:8000/redoc`
 - OpenAPI : `http://127.0.0.1:8000/openapi.json`
 
-Le schéma OpenAPI expose les routes explicites
-d'authentification et de santé.
+Le schéma OpenAPI expose les routes explicites :
 
-Les routes proxy génériques sont exclues volontairement.
+- `/health` ;
+- `/auth/register` ;
+- `/auth/token` ;
+- `/auth/me` ;
+- `/authorization/users/{username}/roles` ;
+- `/authorization/users/{username}/roles/{role_name}`.
+
+Les routes proxy génériques `/api/*` sont volontairement
+exclues du schéma.
 
 ## Tests
 
@@ -572,13 +811,30 @@ Exécuter :
 
     python -m pytest -q
 
-État validé de la Phase 4 :
+État validé de la Phase 5 :
 
-    298 passed, 1 warning
+    377 passed, 1 warning
+
+La couverture inclut notamment :
+
+- JWT valides, expirés, altérés et malformés ;
+- persistance PostgreSQL ;
+- migrations Alembic ;
+- rate limiting Redis ;
+- anti-brute-force ;
+- repositories RBAC ;
+- services d'autorisation ;
+- administration des rôles ;
+- proxy Zero Trust ;
+- spoofing de privilèges ;
+- claims JWT de privilège forgés ;
+- fail-closed PostgreSQL ;
+- fail-closed du backend d'autorisation ;
+- absence d'appel upstream lorsqu'une permission est refusée.
 
 Le warning restant provient de l'intégration actuelle entre
-Starlette TestClient et httpx et n'indique pas un échec
-fonctionnel du projet.
+Starlette `TestClient` et `httpx` et ne représente pas un échec
+fonctionnel.
 
 ## Contrôles utiles
 
@@ -621,9 +877,12 @@ apparaître en clair dans les clés Redis.
 - `/health` représente actuellement uniquement la liveness ;
 - aucune route de readiness complète n'est encore exposée ;
 - Redis ne possède volontairement aucune persistance disque ;
-- le contrôle d'accès fin RBAC n'est pas encore implémenté ;
-- les événements d'audit persistants feront partie d'une phase
-  ultérieure ;
+- le bootstrap du tout premier administrateur reste une opération
+  contrôlée côté infrastructure/base de données ;
+- PostgreSQL conserve un root filesystem writable afin de rester
+  compatible avec le fonctionnement de l'image officielle ;
+- les événements d'audit persistants seront ajoutés lors de la
+  phase d'observabilité ;
 - le déploiement CI/CD n'est pas encore finalisé.
 
 ## Licence

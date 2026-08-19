@@ -45,3 +45,14 @@ def get_service_base_url(service_name: str) -> str:
         )
 
     return configured_url.rstrip("/")
+
+
+def is_registered_service(
+    service_name: str,
+) -> bool:
+    """
+    Return whether a service name belongs to the
+    Gateway's explicit upstream allow-list.
+    """
+
+    return service_name in SERVICE_DEFINITIONS

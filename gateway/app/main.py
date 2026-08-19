@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from gateway.app.auth.router import (
     router as auth_router,
 )
+from gateway.app.authorization.router import (
+    router as authorization_router,
+)
 from gateway.app.database.client import (
     close_database_engine,
     create_database_engine,
@@ -46,9 +49,8 @@ def database_is_configured() -> bool:
     """
     Return whether PostgreSQL configuration is present.
 
-    PostgreSQL remains optional during the staged Phase 4
-    migration so that existing isolated tests can continue
-    running without a real database.
+    PostgreSQL remains optional for isolated tests so that
+    they can continue running without a real database.
 
     Docker always supplies DATABASE_URL.
     """
@@ -165,11 +167,12 @@ app = FastAPI(
         "API Gateway avec JWT, rate limiting "
         "et reverse proxy."
     ),
-    version="0.3.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
 app.include_router(auth_router)
+app.include_router(authorization_router)
 app.include_router(proxy_router)
 
 

@@ -6,7 +6,7 @@ x-python-service: &python-service
     context: .
     dockerfile: Dockerfile
 
-  image: secure-api-gateway:phase4
+  image: secure-api-gateway:phase5
 
   init: true
   restart: unless-stopped

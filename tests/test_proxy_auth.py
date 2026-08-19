@@ -17,6 +17,9 @@ from gateway.app.auth.repository import (
 from gateway.app.auth.tokens import (
     create_access_token,
 )
+from gateway.app.authorization.dependencies import (
+    get_authorization_service,
+)
 from gateway.app.main import app
 from gateway.app.rate_limit.dependencies import (
     get_rate_limiter,
@@ -24,6 +27,14 @@ from gateway.app.rate_limit.dependencies import (
 from gateway.app.rate_limit.models import (
     RateLimitDecision,
 )
+
+
+class FakeAllowedAuthorizationService:
+    async def require_permission(
+        self,
+        **_: Any,
+    ) -> None:
+        return None
 
 
 class FakeAllowedRateLimiter:
@@ -106,6 +117,12 @@ def proxy_auth_context(
     app.dependency_overrides[
         get_rate_limiter
     ] = lambda: FakeAllowedRateLimiter()
+
+    app.dependency_overrides[
+        get_authorization_service
+    ] = (
+        lambda: FakeAllowedAuthorizationService()
+    )
 
     try:
         with TestClient(app) as client:

@@ -2,6 +2,10 @@ from typing import Annotated
 
 import httpx
 
+from gateway.app.authorization.dependencies import (
+    enforce_proxy_authorization,
+)
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -60,6 +64,12 @@ async def proxy_request(
     rate_limit_decision: Annotated[
         RateLimitDecision,
         Depends(enforce_proxy_rate_limit),
+    ],
+    authorization_check: Annotated[
+        None,
+        Depends(
+            enforce_proxy_authorization
+        ),
     ],
     path: str = "",
 ) -> Response:

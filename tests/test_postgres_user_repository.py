@@ -12,6 +12,9 @@ from sqlalchemy.exc import (
     IntegrityError,
 )
 
+from gateway.app.authorization.constants import (
+    DEFAULT_ROLE_ID,
+)
 from gateway.app.auth.repository import (
     UserAlreadyExistsError,
     UserNotFoundError,
@@ -19,6 +22,7 @@ from gateway.app.auth.repository import (
 )
 from gateway.app.database.models import (
     UserRecord,
+    UserRoleRecord,
 )
 from gateway.app.database.user_repository import (
     PostgreSQLUserRepository,
@@ -248,15 +252,31 @@ async def test_create_user_normalizes_and_commits() -> None:
     )
 
     assert factory.calls == 1
-    assert len(session.added) == 1
+    assert len(session.added) == 2
     assert session.committed is True
     assert session.rolled_back is False
 
     record = session.added[0]
+    assignment = session.added[1]
 
     assert isinstance(
         record,
         UserRecord,
+    )
+
+    assert isinstance(
+        assignment,
+        UserRoleRecord,
+    )
+
+    assert (
+        assignment.user_id
+        == record.id
+    )
+
+    assert (
+        assignment.role_id
+        == DEFAULT_ROLE_ID
     )
 
     assert record.username == "anas"
