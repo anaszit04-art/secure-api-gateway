@@ -13,6 +13,9 @@ from gateway.app.auth.dependencies import (
 from gateway.app.auth.models import (
     UserPublic,
 )
+from gateway.app.authorization.dependencies import (
+    get_authorization_service,
+)
 from gateway.app.main import app
 from gateway.app.rate_limit.dependencies import (
     get_rate_limiter,
@@ -40,6 +43,14 @@ TEST_USER = UserPublic(
         tzinfo=timezone.utc,
     ),
 )
+
+
+class FakeAllowedAuthorizationService:
+    async def require_permission(
+        self,
+        **_: Any,
+    ) -> None:
+        return None
 
 
 class FakeUpstreamClient:
@@ -132,6 +143,12 @@ def proxy_context() -> Iterator[
     app.dependency_overrides[
         get_rate_limiter
     ] = lambda: limiter
+
+    app.dependency_overrides[
+        get_authorization_service
+    ] = (
+        lambda: FakeAllowedAuthorizationService()
+    )
 
     try:
         with TestClient(app) as client:

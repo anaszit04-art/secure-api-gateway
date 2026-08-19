@@ -12,6 +12,9 @@ from fastapi.testclient import TestClient
 from gateway.app.auth.dependencies import (
     get_current_user,
 )
+from gateway.app.authorization.dependencies import (
+    get_authorization_service,
+)
 from gateway.app.auth.models import UserPublic
 
 from gateway.app.main import app
@@ -21,6 +24,14 @@ from gateway.app.rate_limit.dependencies import (
 from gateway.app.rate_limit.models import (
     RateLimitDecision,
 )
+
+
+class FakeAllowedAuthorizationService:
+    async def require_permission(
+        self,
+        **_: Any,
+    ) -> None:
+        return None
 
 
 TEST_CURRENT_USER = UserPublic(
@@ -56,6 +67,12 @@ def override_proxy_authentication() -> Iterator[None]:
     app.dependency_overrides[
         get_rate_limiter
     ] = lambda: FakeAllowedRateLimiter()
+
+    app.dependency_overrides[
+        get_authorization_service
+    ] = (
+        lambda: FakeAllowedAuthorizationService()
+    )
 
     try:
         yield
