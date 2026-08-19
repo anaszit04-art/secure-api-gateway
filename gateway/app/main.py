@@ -49,9 +49,8 @@ def database_is_configured() -> bool:
     """
     Return whether PostgreSQL configuration is present.
 
-    PostgreSQL remains optional during the staged Phase 4
-    migration so that existing isolated tests can continue
-    running without a real database.
+    PostgreSQL remains optional for isolated tests so that
+    they can continue running without a real database.
 
     Docker always supplies DATABASE_URL.
     """
@@ -168,7 +167,7 @@ app = FastAPI(
         "API Gateway avec JWT, rate limiting "
         "et reverse proxy."
     ),
-    version="0.3.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
