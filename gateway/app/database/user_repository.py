@@ -20,6 +20,9 @@ from gateway.app.auth.models import (
     StoredUser,
     normalize_username,
 )
+from gateway.app.authorization.constants import (
+    DEFAULT_ROLE_ID,
+)
 from gateway.app.auth.repository import (
     UserAlreadyExistsError,
     UserNotFoundError,
@@ -30,6 +33,7 @@ from gateway.app.database.client import (
 )
 from gateway.app.database.models import (
     UserRecord,
+    UserRoleRecord,
 )
 
 
@@ -189,6 +193,13 @@ class PostgreSQLUserRepository:
             updated_at=now,
         )
 
+        default_role_assignment = (
+            UserRoleRecord(
+                user_id=record.id,
+                role_id=DEFAULT_ROLE_ID,
+            )
+        )
+
         try:
             async with (
                 self._session_factory()
@@ -196,6 +207,10 @@ class PostgreSQLUserRepository:
             ):
                 session.add(
                     record
+                )
+
+                session.add(
+                    default_role_assignment
                 )
 
                 try:
