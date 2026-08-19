@@ -16,6 +16,10 @@ def test_request_header_filter_removes_unsafe_headers() -> None:
         "X-Forwarded-Host": "evil.example",
         "X-Forwarded-Proto": "https",
         "X-Real-IP": "203.0.113.10",
+        "X-Role": "admin",
+        "X-User-Role": "admin",
+        "X-Permission": "proxy:service-a:write",
+        "X-Authorization-Role": "admin",
         "Authorization": "Bearer example-token",
         "Content-Type": "application/json",
     }
@@ -39,6 +43,14 @@ def test_request_header_filter_removes_unsafe_headers() -> None:
     assert "x-forwarded-host" not in filtered_names
     assert "x-forwarded-proto" not in filtered_names
     assert "x-real-ip" not in filtered_names
+
+    assert "x-role" not in filtered_names
+    assert "x-user-role" not in filtered_names
+    assert "x-permission" not in filtered_names
+    assert (
+        "x-authorization-role"
+        not in filtered_names
+    )
 
     assert filtered_headers["Authorization"] == (
         "Bearer example-token"

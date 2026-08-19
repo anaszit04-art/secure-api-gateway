@@ -26,6 +26,16 @@ SPOOFABLE_FORWARDING_HEADERS = frozenset(
 )
 
 
+SPOOFABLE_AUTHORIZATION_HEADERS = frozenset(
+    {
+        "x-role",
+        "x-user-role",
+        "x-permission",
+        "x-authorization-role",
+    }
+)
+
+
 def get_connection_header_tokens(
     headers: Mapping[str, str],
 ) -> set[str]:
@@ -60,6 +70,7 @@ def filter_request_headers(
     blocked_headers = (
         set(HOP_BY_HOP_HEADERS)
         | set(SPOOFABLE_FORWARDING_HEADERS)
+        | set(SPOOFABLE_AUTHORIZATION_HEADERS)
         | get_connection_header_tokens(headers)
         | {
             "host",
