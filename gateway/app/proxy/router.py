@@ -94,6 +94,17 @@ async def proxy_request(
         request.headers
     )
 
+    request_id = getattr(
+        request.state,
+        "request_id",
+        None,
+    )
+
+    if request_id is not None:
+        outgoing_headers[
+            "x-request-id"
+        ] = request_id
+
     if request.client is not None:
         outgoing_headers["x-forwarded-for"] = (
             request.client.host

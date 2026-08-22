@@ -23,6 +23,9 @@ from gateway.app.database.client import (
 from gateway.app.database.config import (
     DatabaseSettings,
 )
+from gateway.app.observability.middleware import (
+    RequestContextMiddleware,
+)
 from gateway.app.proxy.client import (
     create_http_client,
 )
@@ -169,6 +172,10 @@ app = FastAPI(
     ),
     version="0.5.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    RequestContextMiddleware
 )
 
 app.include_router(auth_router)
