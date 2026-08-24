@@ -516,8 +516,8 @@ def test_upstream_404_resets_failure_counter() -> None:
             "service-a"
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         result = await executor.execute(
             service_name="service-a",
@@ -613,8 +613,8 @@ def test_open_circuit_prevents_network_call() -> None:
             "service-a"
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         with pytest.raises(
             CircuitOpenError
@@ -666,8 +666,8 @@ def test_half_open_probe_never_retries() -> None:
             "service-a"
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         clock.advance(
             5
@@ -893,8 +893,8 @@ def test_open_circuit_emits_rejected_event() -> None:
             "service-a"
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         with pytest.raises(
             CircuitOpenError
@@ -959,8 +959,8 @@ def test_half_open_success_emits_recovered_event() -> None:
             "service-a"
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         clock.advance(
             5

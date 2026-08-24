@@ -14,7 +14,7 @@ import httpx
 from gateway.app.proxy.resilience import (
     CircuitBreakerRegistry,
     CircuitOpenError,
-    CircuitState,
+    CircuitPermit,
     ServiceCircuitBreaker,
     UpstreamResilienceEvent,
     UpstreamResilienceSettings,
@@ -95,18 +95,14 @@ class ResilientUpstreamExecutor:
         self,
         *,
         breaker: ServiceCircuitBreaker,
+        permit: CircuitPermit,
         service_name: str,
     ) -> None:
-        before = await breaker.snapshot()
+        opened = await breaker.record_failure(
+            permit
+        )
 
-        await breaker.record_failure()
-
-        after = await breaker.snapshot()
-
-        if (
-            before.state != CircuitState.OPEN
-            and after.state == CircuitState.OPEN
-        ):
+        if opened:
             self._emit_event(
                 service_name=service_name,
                 event=(
@@ -119,18 +115,14 @@ class ResilientUpstreamExecutor:
         self,
         *,
         breaker: ServiceCircuitBreaker,
+        permit: CircuitPermit,
         service_name: str,
     ) -> None:
-        before = await breaker.snapshot()
+        opened = await breaker.record_neutral(
+            permit
+        )
 
-        await breaker.record_neutral()
-
-        after = await breaker.snapshot()
-
-        if (
-            before.state != CircuitState.OPEN
-            and after.state == CircuitState.OPEN
-        ):
+        if opened:
             self._emit_event(
                 service_name=service_name,
                 event=(
@@ -143,16 +135,14 @@ class ResilientUpstreamExecutor:
         self,
         *,
         breaker: ServiceCircuitBreaker,
+        permit: CircuitPermit,
         service_name: str,
     ) -> None:
-        before = await breaker.snapshot()
+        recovered = await breaker.record_success(
+            permit
+        )
 
-        await breaker.record_success()
-
-        if (
-            before.state
-            == CircuitState.HALF_OPEN
-        ):
+        if recovered:
             self._emit_event(
                 service_name=service_name,
                 event=(
@@ -196,7 +186,7 @@ class ResilientUpstreamExecutor:
         )
 
         try:
-            await breaker.before_request()
+            permit = await breaker.before_request()
 
         except CircuitOpenError:
             self._emit_event(
@@ -209,16 +199,9 @@ class ResilientUpstreamExecutor:
 
             raise
 
-        initial_snapshot = (
-            await breaker.snapshot()
-        )
-
         max_attempts = (
             1
-            if (
-                initial_snapshot.state
-                == CircuitState.HALF_OPEN
-            )
+            if permit.half_open_probe
             else self._settings.max_attempts
         )
 
@@ -275,6 +258,7 @@ class ResilientUpstreamExecutor:
                     ):
                         await self._record_failure(
                             breaker=breaker,
+                            permit=permit,
                             service_name=(
                                 service_name
                             ),
@@ -283,6 +267,7 @@ class ResilientUpstreamExecutor:
                     else:
                         await self._record_neutral(
                             breaker=breaker,
+                            permit=permit,
                             service_name=(
                                 service_name
                             ),
@@ -297,12 +282,14 @@ class ResilientUpstreamExecutor:
                 ):
                     await self._record_failure(
                         breaker=breaker,
+                        permit=permit,
                         service_name=service_name,
                     )
 
                 else:
                     await self._record_success(
                         breaker=breaker,
+                        permit=permit,
                         service_name=service_name,
                     )
 
@@ -319,6 +306,7 @@ class ResilientUpstreamExecutor:
         except asyncio.CancelledError:
             await self._record_neutral(
                 breaker=breaker,
+                permit=permit,
                 service_name=service_name,
             )
 

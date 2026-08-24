@@ -230,11 +230,11 @@ def test_circuit_opens_after_consecutive_failures() -> None:
             clock=clock,
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         snapshot = await breaker.snapshot()
 
@@ -247,8 +247,8 @@ def test_circuit_opens_after_consecutive_failures() -> None:
             == 2
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         snapshot = await breaker.snapshot()
 
@@ -280,13 +280,13 @@ def test_open_circuit_rejects_without_calling_upstream() -> None:
             clock=clock,
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         with pytest.raises(
             CircuitOpenError
         ) as captured:
-            await breaker.before_request()
+            permit = await breaker.before_request()
 
         assert (
             captured.value
@@ -313,14 +313,14 @@ def test_circuit_allows_one_half_open_probe_after_cooldown() -> None:
             clock=clock,
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         clock.advance(
             10
         )
 
-        await breaker.before_request()
+        permit = await breaker.before_request()
 
         snapshot = await breaker.snapshot()
 
@@ -337,7 +337,7 @@ def test_circuit_allows_one_half_open_probe_after_cooldown() -> None:
         with pytest.raises(
             CircuitOpenError
         ):
-            await breaker.before_request()
+            permit = await breaker.before_request()
 
     asyncio.run(
         scenario()
@@ -358,15 +358,15 @@ def test_successful_half_open_probe_closes_circuit() -> None:
             clock=clock,
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         clock.advance(
             5
         )
 
-        await breaker.before_request()
-        await breaker.record_success()
+        permit = await breaker.before_request()
+        await breaker.record_success(permit)
 
         snapshot = await breaker.snapshot()
 
@@ -406,15 +406,15 @@ def test_failed_half_open_probe_reopens_circuit() -> None:
             clock=clock,
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         clock.advance(
             5
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         snapshot = await breaker.snapshot()
 
@@ -454,8 +454,8 @@ def test_service_circuits_are_isolated() -> None:
             "service-b"
         )
 
-        await service_a.before_request()
-        await service_a.record_failure()
+        service_a_permit = await service_a.before_request()
+        await service_a.record_failure(service_a_permit)
 
         service_a_snapshot = (
             await service_a.snapshot()
@@ -496,14 +496,14 @@ def test_neutral_half_open_result_releases_probe_without_failure_increment() -> 
             clock=clock,
         )
 
-        await breaker.before_request()
-        await breaker.record_failure()
+        permit = await breaker.before_request()
+        await breaker.record_failure(permit)
 
         clock.advance(
             5
         )
 
-        await breaker.before_request()
+        permit = await breaker.before_request()
 
         before = await breaker.snapshot()
 
@@ -511,7 +511,7 @@ def test_neutral_half_open_result_releases_probe_without_failure_increment() -> 
             CircuitState.HALF_OPEN
         )
 
-        await breaker.record_neutral()
+        await breaker.record_neutral(permit)
 
         after = await breaker.snapshot()
 
@@ -532,6 +532,178 @@ def test_neutral_half_open_result_releases_probe_without_failure_increment() -> 
         assert (
             after.retry_after_seconds
             == 5
+        )
+
+    asyncio.run(
+        scenario()
+    )
+
+
+def test_stale_closed_success_cannot_close_newly_opened_circuit() -> None:
+    async def scenario() -> None:
+        clock = FakeClock()
+
+        breaker = ServiceCircuitBreaker(
+            settings=(
+                UpstreamResilienceSettings(
+                    failure_threshold=1,
+                    recovery_timeout_seconds=10,
+                )
+            ),
+            clock=clock,
+        )
+
+        failing_permit = (
+            await breaker.before_request()
+        )
+
+        stale_success_permit = (
+            await breaker.before_request()
+        )
+
+        opened = await breaker.record_failure(
+            failing_permit
+        )
+
+        assert opened is True
+
+        opened_snapshot = (
+            await breaker.snapshot()
+        )
+
+        assert (
+            opened_snapshot.state
+            == CircuitState.OPEN
+        )
+
+        # This request was admitted before the circuit
+        # opened. Its late success must not close the
+        # newer OPEN generation.
+        recovered = await breaker.record_success(
+            stale_success_permit
+        )
+
+        assert recovered is False
+
+        final_snapshot = (
+            await breaker.snapshot()
+        )
+
+        assert (
+            final_snapshot.state
+            == CircuitState.OPEN
+        )
+
+        assert (
+            final_snapshot
+            .consecutive_failures
+            == 1
+        )
+
+    asyncio.run(
+        scenario()
+    )
+
+
+def test_stale_completion_cannot_release_current_half_open_probe() -> None:
+    async def scenario() -> None:
+        clock = FakeClock()
+
+        breaker = ServiceCircuitBreaker(
+            settings=(
+                UpstreamResilienceSettings(
+                    failure_threshold=1,
+                    recovery_timeout_seconds=5,
+                )
+            ),
+            clock=clock,
+        )
+
+        stale_permit = (
+            await breaker.before_request()
+        )
+
+        failing_permit = (
+            await breaker.before_request()
+        )
+
+        opened = await breaker.record_failure(
+            failing_permit
+        )
+
+        assert opened is True
+
+        clock.advance(
+            5
+        )
+
+        probe_permit = (
+            await breaker.before_request()
+        )
+
+        assert (
+            probe_permit.half_open_probe
+            is True
+        )
+
+        before_stale = (
+            await breaker.snapshot()
+        )
+
+        assert (
+            before_stale.state
+            == CircuitState.HALF_OPEN
+        )
+
+        assert (
+            before_stale
+            .half_open_probe_in_flight
+            is True
+        )
+
+        # A completion from the old CLOSED generation
+        # must not reopen the circuit or release the
+        # current HALF_OPEN probe.
+        changed = await breaker.record_neutral(
+            stale_permit
+        )
+
+        assert changed is False
+
+        after_stale = (
+            await breaker.snapshot()
+        )
+
+        assert (
+            after_stale.state
+            == CircuitState.HALF_OPEN
+        )
+
+        assert (
+            after_stale
+            .half_open_probe_in_flight
+            is True
+        )
+
+        recovered = await breaker.record_success(
+            probe_permit
+        )
+
+        assert recovered is True
+
+        final_snapshot = (
+            await breaker.snapshot()
+        )
+
+        assert (
+            final_snapshot.state
+            == CircuitState.CLOSED
+        )
+
+        assert (
+            final_snapshot
+            .half_open_probe_in_flight
+            is False
         )
 
     asyncio.run(

@@ -186,6 +186,25 @@ class CircuitSnapshot:
     half_open_probe_in_flight: bool
 
 
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class CircuitPermit:
+    """
+    Admission token for one logical upstream call.
+
+    The generation prevents a completion admitted under
+    an older circuit state from mutating a newer state.
+
+    half_open_probe identifies the single recovery probe
+    admitted while the circuit is HALF_OPEN.
+    """
+
+    generation: int
+    half_open_probe: bool
+
+
 def method_is_retryable(
     method: str,
 ) -> bool:
@@ -312,6 +331,12 @@ class ServiceCircuitBreaker:
             False
         )
 
+        # Incremented whenever the circuit transitions
+        # between major lifecycle states. Completions
+        # carrying an older generation are stale and
+        # must not mutate the current circuit.
+        self._generation = 0
+
         self._lock = asyncio.Lock()
 
     def _retry_after_unlocked(
@@ -341,12 +366,13 @@ class ServiceCircuitBreaker:
 
     async def before_request(
         self,
-    ) -> None:
+    ) -> CircuitPermit:
         """
         Admit or reject one logical upstream call.
 
-        A logical call may later contain a bounded retry,
-        but it acquires the circuit only once.
+        The returned permit binds the logical call to
+        the circuit generation under which it was
+        admitted.
         """
 
         async with self._lock:
@@ -354,7 +380,10 @@ class ServiceCircuitBreaker:
                 self._state
                 == CircuitState.CLOSED
             ):
-                return
+                return CircuitPermit(
+                    generation=self._generation,
+                    half_open_probe=False,
+                )
 
             if (
                 self._state
@@ -379,7 +408,12 @@ class ServiceCircuitBreaker:
                     True
                 )
 
-                return
+                self._generation += 1
+
+                return CircuitPermit(
+                    generation=self._generation,
+                    half_open_probe=True,
+                )
 
             if (
                 self._half_open_probe_in_flight
@@ -392,41 +426,99 @@ class ServiceCircuitBreaker:
                 True
             )
 
+            return CircuitPermit(
+                generation=self._generation,
+                half_open_probe=True,
+            )
+
     async def record_success(
         self,
-    ) -> None:
+        permit: CircuitPermit,
+    ) -> bool:
         """
-        A healthy logical call closes the circuit and
-        resets the consecutive-failure counter.
-        """
+        Record a healthy logical call.
 
-        async with self._lock:
-            self._state = (
-                CircuitState.CLOSED
-            )
+        Returns True only when a valid HALF_OPEN probe
+        recovered the circuit.
 
-            self._consecutive_failures = 0
-            self._opened_at = None
-
-            self._half_open_probe_in_flight = (
-                False
-            )
-
-    async def record_failure(
-        self,
-    ) -> None:
-        """
-        Record one logical upstream failure.
-
-        Retries belonging to the same client request
-        should result in only one circuit failure.
+        Stale completions are ignored.
         """
 
         async with self._lock:
             if (
-                self._state
-                == CircuitState.HALF_OPEN
+                permit.generation
+                != self._generation
             ):
+                return False
+
+            if permit.half_open_probe:
+                if (
+                    self._state
+                    != CircuitState.HALF_OPEN
+                    or not (
+                        self
+                        ._half_open_probe_in_flight
+                    )
+                ):
+                    return False
+
+                self._state = (
+                    CircuitState.CLOSED
+                )
+
+                self._consecutive_failures = 0
+                self._opened_at = None
+
+                self._half_open_probe_in_flight = (
+                    False
+                )
+
+                self._generation += 1
+
+                return True
+
+            if (
+                self._state
+                != CircuitState.CLOSED
+            ):
+                return False
+
+            self._consecutive_failures = 0
+            self._opened_at = None
+
+            return False
+
+    async def record_failure(
+        self,
+        permit: CircuitPermit,
+    ) -> bool:
+        """
+        Record one logical upstream failure.
+
+        Returns True only when this completion caused
+        the circuit to transition to OPEN.
+
+        Stale completions are ignored.
+        """
+
+        async with self._lock:
+            if (
+                permit.generation
+                != self._generation
+            ):
+                return False
+
+            if permit.half_open_probe:
+                if (
+                    self._state
+                    != CircuitState.HALF_OPEN
+                    or not (
+                        self
+                        ._half_open_probe_in_flight
+                    )
+                ):
+                    return False
+
                 self._state = (
                     CircuitState.OPEN
                 )
@@ -444,7 +536,15 @@ class ServiceCircuitBreaker:
                     False
                 )
 
-                return
+                self._generation += 1
+
+                return True
+
+            if (
+                self._state
+                != CircuitState.CLOSED
+            ):
+                return False
 
             self._consecutive_failures += 1
 
@@ -461,31 +561,44 @@ class ServiceCircuitBreaker:
                     self._clock()
                 )
 
-            self._half_open_probe_in_flight = (
-                False
-            )
+                self._half_open_probe_in_flight = (
+                    False
+                )
+
+                self._generation += 1
+
+                return True
+
+            return False
 
     async def record_neutral(
         self,
-    ) -> None:
+        permit: CircuitPermit,
+    ) -> bool:
         """
         Finish a logical call that cannot be attributed
         to upstream health.
 
-        A PoolTimeout, for example, reflects local
-        Gateway connection-pool pressure. It must not
-        increment the upstream failure counter.
+        Returns True only when a valid HALF_OPEN probe
+        is returned to OPEN.
 
-        If this happens during HALF_OPEN, reopen the
-        circuit so another single probe can be attempted
-        after the normal recovery interval instead of
-        leaving the probe permanently in flight.
+        A stale completion cannot release or alter the
+        current HALF_OPEN probe.
         """
 
         async with self._lock:
             if (
-                self._state
+                permit.generation
+                != self._generation
+            ):
+                return False
+
+            if (
+                permit.half_open_probe
+                and self._state
                 == CircuitState.HALF_OPEN
+                and self
+                ._half_open_probe_in_flight
             ):
                 self._state = (
                     CircuitState.OPEN
@@ -495,9 +608,15 @@ class ServiceCircuitBreaker:
                     self._clock()
                 )
 
-            self._half_open_probe_in_flight = (
-                False
-            )
+                self._half_open_probe_in_flight = (
+                    False
+                )
+
+                self._generation += 1
+
+                return True
+
+            return False
 
     async def snapshot(
         self,
