@@ -5,8 +5,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
+    SmallInteger,
     String,
     Text,
     Uuid,
@@ -18,6 +20,12 @@ from sqlalchemy.orm import (
     mapped_column,
 )
 
+from gateway.app.audit.models import (
+    MAXIMUM_AUDIT_CODE_LENGTH,
+    MAXIMUM_AUDIT_EVENT_TYPE_LENGTH,
+    MAXIMUM_AUDIT_METHOD_LENGTH,
+    MAXIMUM_AUDIT_OUTCOME_LENGTH,
+)
 from gateway.app.auth.models import (
     MAXIMUM_USERNAME_LENGTH,
 )
@@ -256,5 +264,158 @@ class RolePermissionRecord(Base):
                 ondelete="CASCADE",
             ),
             primary_key=True,
+        )
+    )
+
+
+class AuditEventRecord(Base):
+    """
+    Append-oriented persistent security audit event.
+
+    actor_user_id and target_user_id intentionally
+    remain UUID values without foreign keys so that
+    audit history survives future account deletion.
+    """
+
+    __tablename__ = "audit_events"
+
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "status_code IS NULL OR "
+                "(status_code >= 100 "
+                "AND status_code <= 599)"
+            ),
+            name=(
+                "ck_audit_events_"
+                "status_code_range"
+            ),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(
+            as_uuid=True,
+        ),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    occurred_at: Mapped[datetime] = (
+        mapped_column(
+            DateTime(
+                timezone=True,
+            ),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    event_type: Mapped[str] = (
+        mapped_column(
+            String(
+                MAXIMUM_AUDIT_EVENT_TYPE_LENGTH
+            ),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    outcome: Mapped[str] = mapped_column(
+        String(
+            MAXIMUM_AUDIT_OUTCOME_LENGTH
+        ),
+        nullable=False,
+    )
+
+    request_id: Mapped[UUID] = (
+        mapped_column(
+            Uuid(
+                as_uuid=True,
+            ),
+            nullable=False,
+            index=True,
+        )
+    )
+
+    actor_user_id: Mapped[
+        UUID | None
+    ] = mapped_column(
+        Uuid(
+            as_uuid=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+
+    target_user_id: Mapped[
+        UUID | None
+    ] = mapped_column(
+        Uuid(
+            as_uuid=True,
+        ),
+        nullable=True,
+        index=True,
+    )
+
+    permission_code: Mapped[
+        str | None
+    ] = mapped_column(
+        String(
+            MAXIMUM_AUDIT_CODE_LENGTH
+        ),
+        nullable=True,
+    )
+
+    role_name: Mapped[
+        str | None
+    ] = mapped_column(
+        String(
+            MAXIMUM_AUDIT_CODE_LENGTH
+        ),
+        nullable=True,
+    )
+
+    service_name: Mapped[
+        str | None
+    ] = mapped_column(
+        String(
+            MAXIMUM_AUDIT_CODE_LENGTH
+        ),
+        nullable=True,
+    )
+
+    method: Mapped[
+        str | None
+    ] = mapped_column(
+        String(
+            MAXIMUM_AUDIT_METHOD_LENGTH
+        ),
+        nullable=True,
+    )
+
+    status_code: Mapped[
+        int | None
+    ] = mapped_column(
+        SmallInteger,
+        nullable=True,
+    )
+
+    reason_code: Mapped[
+        str | None
+    ] = mapped_column(
+        String(
+            MAXIMUM_AUDIT_CODE_LENGTH
+        ),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = (
+        mapped_column(
+            DateTime(
+                timezone=True,
+            ),
+            nullable=False,
+            server_default=func.now(),
         )
     )

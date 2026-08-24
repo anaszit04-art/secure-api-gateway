@@ -12,6 +12,12 @@ from uuid import (
 )
 
 
+MAXIMUM_AUDIT_EVENT_TYPE_LENGTH = 64
+MAXIMUM_AUDIT_OUTCOME_LENGTH = 32
+MAXIMUM_AUDIT_CODE_LENGTH = 160
+MAXIMUM_AUDIT_METHOD_LENGTH = 16
+
+
 class AuditEventType(StrEnum):
     """
     Stable security-event taxonomy.
@@ -67,7 +73,7 @@ def _validate_optional_code(
     *,
     name: str,
     value: str | None,
-    max_length: int = 160,
+    max_length: int = MAXIMUM_AUDIT_CODE_LENGTH,
 ) -> None:
     if value is None:
         return
@@ -167,7 +173,7 @@ class SecurityAuditEvent:
         _validate_optional_code(
             name="method",
             value=self.method,
-            max_length=16,
+            max_length=MAXIMUM_AUDIT_METHOD_LENGTH,
         )
 
         _validate_optional_code(
