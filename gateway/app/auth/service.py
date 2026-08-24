@@ -6,6 +6,7 @@ from anyio import to_thread
 
 from gateway.app.auth.config import AuthSettings
 from gateway.app.auth.models import (
+    AuthenticationResult,
     StoredUser,
     UserPublic,
     UserRegistration,
@@ -166,14 +167,19 @@ class AuthenticationService:
 
         return stored_user
 
-    async def authenticate_and_create_token(
+    async def authenticate_and_create_result(
         self,
         *,
         username: str,
         password: str,
-    ) -> str:
+    ) -> AuthenticationResult:
         """
-        Authenticate credentials and issue an access token.
+        Authenticate credentials and return the issued
+        token together with the safe authenticated user.
+
+        The user identity is kept outside the JWT and is
+        used by trusted Gateway components such as the
+        security-audit layer.
         """
 
         stored_user = (
@@ -183,7 +189,34 @@ class AuthenticationService:
             )
         )
 
-        return create_access_token(
+        access_token = create_access_token(
             subject=stored_user.username,
             settings=self._settings,
         )
+
+        return AuthenticationResult(
+            access_token=access_token,
+            user=to_public_user(
+                stored_user
+            ),
+        )
+
+    async def authenticate_and_create_token(
+        self,
+        *,
+        username: str,
+        password: str,
+    ) -> str:
+        """
+        Backward-compatible token-only authentication
+        helper.
+        """
+
+        result = (
+            await self.authenticate_and_create_result(
+                username=username,
+                password=password,
+            )
+        )
+
+        return result.access_token

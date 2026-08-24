@@ -36,6 +36,13 @@ SPOOFABLE_AUTHORIZATION_HEADERS = frozenset(
 )
 
 
+GATEWAY_OWNED_OBSERVABILITY_HEADERS = frozenset(
+    {
+        "x-request-id",
+    }
+)
+
+
 def get_connection_header_tokens(
     headers: Mapping[str, str],
 ) -> set[str]:
@@ -71,6 +78,7 @@ def filter_request_headers(
         set(HOP_BY_HOP_HEADERS)
         | set(SPOOFABLE_FORWARDING_HEADERS)
         | set(SPOOFABLE_AUTHORIZATION_HEADERS)
+        | set(GATEWAY_OWNED_OBSERVABILITY_HEADERS)
         | get_connection_header_tokens(headers)
         | {
             "host",
@@ -91,6 +99,7 @@ def filter_response_headers(
 ) -> dict[str, str]:
     blocked_headers = (
         set(HOP_BY_HOP_HEADERS)
+        | set(GATEWAY_OWNED_OBSERVABILITY_HEADERS)
         | get_connection_header_tokens(headers)
         | {
             "content-length",

@@ -32,6 +32,6 @@ COPY --chown=10001:10001 microservices ./microservices
 
 USER 10001:10001
 
-EXPOSE 8000 8001 8002
+EXPOSE 8000 8001 8002 9100
 
 CMD ["python", "-m", "uvicorn", "gateway.app.main:app", "--host", "0.0.0.0", "--port", "8000"]

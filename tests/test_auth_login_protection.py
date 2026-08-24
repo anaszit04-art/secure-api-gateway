@@ -1,10 +1,19 @@
+from datetime import (
+    datetime,
+    timezone,
+)
 from typing import Any, Iterator
+from uuid import UUID
 
 import pytest
 
 from fastapi.testclient import TestClient
 from gateway.app.auth.dependencies import (
     get_authentication_service,
+)
+from gateway.app.auth.models import (
+    AuthenticationResult,
+    UserPublic,
 )
 from gateway.app.auth.service import (
     INVALID_CREDENTIALS_MESSAGE,
@@ -44,12 +53,12 @@ class FakeAuthenticationService:
             tuple[str, str]
         ] = []
 
-    async def authenticate_and_create_token(
+    async def authenticate_and_create_result(
         self,
         *,
         username: str,
         password: str,
-    ) -> str:
+    ) -> AuthenticationResult:
         self.calls.append(
             (
                 username,
@@ -60,7 +69,25 @@ class FakeAuthenticationService:
         if self.error is not None:
             raise self.error
 
-        return self.token
+        return AuthenticationResult(
+            access_token=self.token,
+            user=UserPublic(
+                id=UUID(
+                    "70000000-0000-0000-"
+                    "0000-000000000001"
+                ),
+                username=(
+                    username.strip().lower()
+                ),
+                is_active=True,
+                created_at=datetime(
+                    2026,
+                    8,
+                    24,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+        )
 
 
 class FakeLoginRateLimiter:

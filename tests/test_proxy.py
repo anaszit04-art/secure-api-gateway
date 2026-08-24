@@ -342,3 +342,61 @@ def test_proxy_returns_504_when_upstream_times_out() -> None:
     assert response.json() == {
         "detail": "Upstream service timeout",
     }
+
+
+def test_proxy_replaces_and_propagates_request_id() -> None:
+    fake_client = FakeAsyncClient(
+        response=httpx.Response(
+            status_code=200,
+            json={
+                "message": "pong",
+            },
+            headers={
+                "Content-Type": "application/json",
+                "X-Request-ID": (
+                    "upstream-controlled-id"
+                ),
+            },
+        )
+    )
+
+    response = call_gateway(
+        fake_client,
+        "GET",
+        "/api/service-a/ping",
+        headers={
+            "X-Request-ID": (
+                "client-controlled-id"
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+
+    gateway_request_id = (
+        response.headers[
+            "x-request-id"
+        ]
+    )
+
+    assert gateway_request_id not in {
+        "client-controlled-id",
+        "upstream-controlled-id",
+    }
+
+    UUID(
+        gateway_request_id
+    )
+
+    upstream_headers = (
+        fake_client.calls[0][
+            "headers"
+        ]
+    )
+
+    assert (
+        upstream_headers[
+            "x-request-id"
+        ]
+        == gateway_request_id
+    )

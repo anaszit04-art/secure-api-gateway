@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import Annotated
 
 import httpx
@@ -14,6 +15,14 @@ from fastapi import (
     Response,
 )
 
+from gateway.app.observability.metrics import (
+    record_upstream_metric_best_effort,
+    record_upstream_resilience_metric_best_effort,
+    status_class,
+)
+from gateway.app.proxy.executor import (
+    ResilientUpstreamExecutor,
+)
 from gateway.app.proxy.headers import (
     filter_request_headers,
     filter_response_headers,
@@ -21,6 +30,12 @@ from gateway.app.proxy.headers import (
 from gateway.app.proxy.registry import (
     UnknownServiceError,
     get_service_base_url,
+)
+from gateway.app.proxy.resilience import (
+    CircuitBreakerRegistry,
+    CircuitOpenError,
+    UpstreamResilienceEvent,
+    UpstreamResilienceSettings,
 )
 from gateway.app.rate_limit.dependencies import (
     build_rate_limit_headers,
@@ -94,6 +109,17 @@ async def proxy_request(
         request.headers
     )
 
+    request_id = getattr(
+        request.state,
+        "request_id",
+        None,
+    )
+
+    if request_id is not None:
+        outgoing_headers[
+            "x-request-id"
+        ] = request_id
+
     if request.client is not None:
         outgoing_headers["x-forwarded-for"] = (
             request.client.host
@@ -116,9 +142,45 @@ async def proxy_request(
         request.app.state.http_client
     )
 
+    resilience_settings: (
+        UpstreamResilienceSettings
+    ) = (
+        request.app.state
+        .upstream_resilience_settings
+    )
+
+    circuit_breakers: (
+        CircuitBreakerRegistry
+    ) = (
+        request.app.state
+        .upstream_circuit_breakers
+    )
+
+    def emit_resilience_event(
+        observed_service: str,
+        observed_event: UpstreamResilienceEvent,
+    ) -> None:
+        record_upstream_resilience_metric_best_effort(
+            request=request,
+            service=observed_service,
+            event=observed_event.value,
+        )
+
+    executor = ResilientUpstreamExecutor(
+        client=http_client,
+        circuits=circuit_breakers,
+        settings=resilience_settings,
+        on_event=emit_resilience_event,
+    )
+
+    upstream_started_at = (
+        perf_counter()
+    )
+
     try:
-        upstream_response = (
-            await http_client.request(
+        execution_result = (
+            await executor.execute(
+                service_name=service_name,
                 method=request.method,
                 url=target_url,
                 params=list(
@@ -129,19 +191,69 @@ async def proxy_request(
             )
         )
 
+        upstream_response = (
+            execution_result.response
+        )
+
+    except CircuitOpenError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Upstream service temporarily "
+                "unavailable"
+            ),
+            headers={
+                "Retry-After": str(
+                    exc.retry_after_seconds
+                ),
+            },
+        ) from exc
+
     except httpx.TimeoutException as exc:
+        record_upstream_metric_best_effort(
+            request=request,
+            service=service_name,
+            outcome="timeout",
+            duration_seconds=(
+                perf_counter()
+                - upstream_started_at
+            ),
+        )
+
         raise HTTPException(
             status_code=504,
             detail="Upstream service timeout",
         ) from exc
 
     except httpx.RequestError as exc:
+        record_upstream_metric_best_effort(
+            request=request,
+            service=service_name,
+            outcome="unavailable",
+            duration_seconds=(
+                perf_counter()
+                - upstream_started_at
+            ),
+        )
+
         raise HTTPException(
             status_code=502,
             detail=(
                 "Upstream service unavailable"
             ),
         ) from exc
+
+    record_upstream_metric_best_effort(
+        request=request,
+        service=service_name,
+        outcome=status_class(
+            upstream_response.status_code
+        ),
+        duration_seconds=(
+            perf_counter()
+            - upstream_started_at
+        ),
+    )
 
     response_headers = (
         filter_response_headers(

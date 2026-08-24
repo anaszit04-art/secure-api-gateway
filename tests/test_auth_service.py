@@ -361,3 +361,39 @@ async def test_authenticate_and_create_token(
     )
 
     assert claims.subject == "anas"
+
+
+@pytest.mark.anyio
+async def test_authenticate_and_create_result_returns_user_identity(
+    auth_system: tuple[
+        InMemoryUserRepository,
+        AuthenticationService,
+    ],
+    auth_settings: AuthSettings,
+) -> None:
+    _, service = auth_system
+
+    await register_default_user(
+        service
+    )
+
+    result = (
+        await service
+        .authenticate_and_create_result(
+            username="anas",
+            password=VALID_PASSWORD,
+        )
+    )
+
+    assert result.user.username == "anas"
+    assert result.user.is_active is True
+
+    claims = decode_access_token(
+        token=result.access_token,
+        settings=auth_settings,
+    )
+
+    assert (
+        claims.subject
+        == result.user.username
+    )

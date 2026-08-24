@@ -9,11 +9,22 @@ from fastapi import (
     status,
 )
 
+from gateway.app.audit.dependencies import (
+    AuditServiceDependency,
+    record_request_security_event,
+)
+from gateway.app.audit.models import (
+    AuditEventType,
+    AuditOutcome,
+)
 from gateway.app.auth.dependencies import (
     get_current_user,
 )
 from gateway.app.auth.models import (
     UserPublic,
+)
+from gateway.app.observability.metrics import (
+    record_rate_limit_metric_best_effort,
 )
 from gateway.app.rate_limit.models import (
     RateLimitDecision,
@@ -106,6 +117,8 @@ def build_rate_limit_headers(
 
 
 async def enforce_proxy_rate_limit(
+    request: Request,
+    service_name: str,
     current_user: Annotated[
         UserPublic,
         Depends(get_current_user),
@@ -118,20 +131,50 @@ async def enforce_proxy_rate_limit(
         RateLimitPolicy,
         Depends(get_proxy_rate_limit_policy),
     ],
+    audit_service: AuditServiceDependency,
 ) -> RateLimitDecision:
     """
     Apply the authenticated proxy policy.
 
     The internal UUID is used instead of the username
     to produce a stable, non-readable Redis identity.
+
+    Rejections and Redis backend failures are audited
+    using the Gateway-owned request correlation ID.
     """
 
     try:
         decision = await limiter.check(
-            identity=str(current_user.id),
+            identity=str(
+                current_user.id
+            ),
             policy=policy,
         )
+
     except RateLimitBackendError as exc:
+        record_rate_limit_metric_best_effort(
+            request=request,
+            scope="proxy",
+            decision="unavailable",
+        )
+
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType
+                .RATE_LIMIT_BACKEND_UNAVAILABLE
+            ),
+            outcome=AuditOutcome.UNAVAILABLE,
+            actor_user_id=current_user.id,
+            service_name=service_name,
+            method=request.method,
+            status_code=503,
+            reason_code=(
+                "proxy_rate_limit_backend_unavailable"
+            ),
+        )
+
         raise HTTPException(
             status_code=(
                 status.HTTP_503_SERVICE_UNAVAILABLE
@@ -145,7 +188,33 @@ async def enforce_proxy_rate_limit(
             },
         ) from exc
 
+    record_rate_limit_metric_best_effort(
+        request=request,
+        scope="proxy",
+        decision=(
+            "allowed"
+            if decision.allowed
+            else "rejected"
+        ),
+    )
+
     if not decision.allowed:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType.RATE_LIMIT_REJECTED
+            ),
+            outcome=AuditOutcome.DENIED,
+            actor_user_id=current_user.id,
+            service_name=service_name,
+            method=request.method,
+            status_code=429,
+            reason_code=(
+                "proxy_rate_limit_exceeded"
+            ),
+        )
+
         raise HTTPException(
             status_code=(
                 status.HTTP_429_TOO_MANY_REQUESTS

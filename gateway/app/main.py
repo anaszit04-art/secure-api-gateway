@@ -23,8 +23,24 @@ from gateway.app.database.client import (
 from gateway.app.database.config import (
     DatabaseSettings,
 )
+from gateway.app.observability.metrics import (
+    GatewayMetrics,
+    MetricsServerHandle,
+    MetricsSettings,
+    start_metrics_server,
+)
+from gateway.app.observability.middleware import (
+    RequestContextMiddleware,
+)
 from gateway.app.proxy.client import (
     create_http_client,
+)
+from gateway.app.proxy.registry import (
+    SERVICE_DEFINITIONS,
+)
+from gateway.app.proxy.resilience import (
+    CircuitBreakerRegistry,
+    UpstreamResilienceSettings,
 )
 from gateway.app.proxy.router import (
     router as proxy_router,
@@ -68,6 +84,43 @@ def database_is_configured() -> bool:
 async def lifespan(
     app: FastAPI,
 ) -> AsyncIterator[None]:
+    metrics_settings = (
+        MetricsSettings.from_environment()
+    )
+
+    upstream_resilience_settings = (
+        UpstreamResilienceSettings
+        .from_environment()
+    )
+
+    upstream_circuit_breakers = (
+        CircuitBreakerRegistry(
+            service_names=(
+                SERVICE_DEFINITIONS.keys()
+            ),
+            settings=(
+                upstream_resilience_settings
+            ),
+        )
+    )
+
+    app.state.upstream_resilience_settings = (
+        upstream_resilience_settings
+    )
+
+    app.state.upstream_circuit_breakers = (
+        upstream_circuit_breakers
+    )
+
+    metrics = GatewayMetrics()
+
+    app.state.metrics = metrics
+    app.state.metrics_server = None
+
+    metrics_server: (
+        MetricsServerHandle | None
+    ) = None
+
     redis_settings = (
         RedisSettings.from_environment()
     )
@@ -101,6 +154,20 @@ async def lifespan(
     app.state.database_session_factory = None
 
     try:
+        if metrics_settings.enabled:
+            metrics_server = (
+                start_metrics_server(
+                    metrics=metrics,
+                    settings=(
+                        metrics_settings
+                    ),
+                )
+            )
+
+            app.state.metrics_server = (
+                metrics_server
+            )
+
         if database_is_configured():
             database_settings = (
                 DatabaseSettings.from_environment()
@@ -151,6 +218,11 @@ async def lifespan(
 
             yield
     finally:
+        if metrics_server is not None:
+            metrics_server.close()
+
+            app.state.metrics_server = None
+
         if database_engine is not None:
             await close_database_engine(
                 database_engine
@@ -164,11 +236,16 @@ async def lifespan(
 app = FastAPI(
     title="Secure API Gateway",
     description=(
-        "API Gateway avec JWT, rate limiting "
-        "et reverse proxy."
+        "API Gateway Zero Trust avec JWT, "
+        "rate limiting, RBAC, audit de sécurité, "
+        "observabilité et reverse proxy résilient."
     ),
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    RequestContextMiddleware
 )
 
 app.include_router(auth_router)

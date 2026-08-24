@@ -20,6 +20,7 @@ def test_request_header_filter_removes_unsafe_headers() -> None:
         "X-User-Role": "admin",
         "X-Permission": "proxy:service-a:write",
         "X-Authorization-Role": "admin",
+        "X-Request-ID": "client-controlled-id",
         "Authorization": "Bearer example-token",
         "Content-Type": "application/json",
     }
@@ -51,6 +52,8 @@ def test_request_header_filter_removes_unsafe_headers() -> None:
         "x-authorization-role"
         not in filtered_names
     )
+
+    assert "x-request-id" not in filtered_names
 
     assert filtered_headers["Authorization"] == (
         "Bearer example-token"
@@ -93,6 +96,4 @@ def test_response_header_filter_removes_proxy_headers() -> None:
     assert filtered_headers["Content-Type"] == (
         "application/json"
     )
-    assert filtered_headers["X-Request-ID"] == (
-        "request-123"
-    )
+    assert "x-request-id" not in filtered_names

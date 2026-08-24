@@ -54,9 +54,24 @@ def test_initial_revision_has_no_parent() -> None:
 def test_rbac_revision_follows_initial_revision() -> None:
     scripts = load_scripts()
 
+    revision = scripts.get_revision(
+        "b04e170d1c97"
+    )
+
+    assert revision is not None
+
+    assert (
+        revision.down_revision
+        == "1cc279e452ed"
+    )
+
+
+def test_audit_revision_follows_rbac_revision() -> None:
+    scripts = load_scripts()
+
     head = scripts.get_current_head()
 
-    assert head == "b04e170d1c97"
+    assert head == "6f2a91c8d4e7"
 
     revision = scripts.get_revision(
         head
@@ -66,7 +81,7 @@ def test_rbac_revision_follows_initial_revision() -> None:
 
     assert (
         revision.down_revision
-        == "1cc279e452ed"
+        == "b04e170d1c97"
     )
 
 

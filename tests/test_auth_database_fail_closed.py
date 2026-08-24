@@ -73,10 +73,10 @@ class FailingUserRepository:
 
 
 class FailingAuthenticationService:
-    async def authenticate_and_create_token(
+    async def authenticate_and_create_result(
         self,
         **_: Any,
-    ) -> str:
+    ) -> Any:
         raise UserRepositoryBackendError(
             "database unavailable"
         )

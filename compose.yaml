@@ -6,7 +6,7 @@ x-python-service: &python-service
     context: .
     dockerfile: Dockerfile
 
-  image: secure-api-gateway:phase5
+  image: secure-api-gateway:phase6
 
   init: true
   restart: unless-stopped
@@ -244,6 +244,16 @@ services:
       REDIS_MAX_CONNECTIONS: "${REDIS_MAX_CONNECTIONS:-20}"
       REDIS_VERIFY_ON_STARTUP: "true"
 
+      METRICS_ENABLED: "${METRICS_ENABLED:-true}"
+      METRICS_HOST: "0.0.0.0"
+      METRICS_PORT: "${METRICS_PORT:-9100}"
+
+      UPSTREAM_MAX_ATTEMPTS: "${UPSTREAM_MAX_ATTEMPTS:-2}"
+      UPSTREAM_RETRY_BASE_DELAY_SECONDS: "${UPSTREAM_RETRY_BASE_DELAY_SECONDS:-0.1}"
+      UPSTREAM_CIRCUIT_FAILURE_THRESHOLD: "${UPSTREAM_CIRCUIT_FAILURE_THRESHOLD:-3}"
+      UPSTREAM_CIRCUIT_RECOVERY_SECONDS: "${UPSTREAM_CIRCUIT_RECOVERY_SECONDS:-10}"
+
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -256,6 +266,9 @@ services:
 
       redis:
         condition: service_healthy
+
+    expose:
+      - "9100"
 
     ports:
       - "127.0.0.1:8000:8000"

@@ -126,6 +126,25 @@ class UserPublic(BaseModel):
     is_active: bool
     created_at: datetime
 
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class AuthenticationResult:
+    """
+    Internal successful-authentication result.
+
+    It carries the issued token together with the safe
+    authenticated user identity required by downstream
+    security auditing.
+
+    It is never returned directly by an API endpoint.
+    """
+
+    access_token: str
+    user: UserPublic
+
+
 class TokenResponse(BaseModel):
     """
     OAuth2-compatible access-token response.
