@@ -457,3 +457,42 @@ def test_metric_helpers_never_change_business_outcome() -> None:
         outcome="2xx",
         duration_seconds=0.1,
     )
+
+
+def test_upstream_resilience_metric_is_bounded() -> None:
+    from types import SimpleNamespace
+
+    from gateway.app.observability.metrics import (
+        record_upstream_resilience_metric_best_effort,
+    )
+
+    metrics = GatewayMetrics()
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                metrics=metrics,
+            )
+        )
+    )
+
+    record_upstream_resilience_metric_best_effort(
+        request=request,
+        service="service-a",
+        event="retry",
+    )
+
+    rendered = render(
+        metrics
+    )
+
+    assert (
+        'gateway_upstream_resilience_events_total'
+        '{event="retry",service="service-a"} '
+        '1.0'
+        in rendered
+    )
+
+    assert "path=" not in rendered
+    assert "request_id=" not in rendered
+    assert "user_id=" not in rendered

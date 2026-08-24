@@ -281,6 +281,24 @@ class GatewayMetrics:
             registry=self.registry,
         )
 
+        self.upstream_resilience_events_total = (
+            Counter(
+                (
+                    "gateway_upstream_"
+                    "resilience_events_total"
+                ),
+                (
+                    "Total bounded upstream "
+                    "resilience events."
+                ),
+                (
+                    "service",
+                    "event",
+                ),
+                registry=self.registry,
+            )
+        )
+
         self.upstream_request_duration_seconds = (
             Histogram(
                 (
@@ -349,6 +367,29 @@ class GatewayMetrics:
         self.rate_limit_decisions_total.labels(
             scope=scope,
             decision=decision,
+        ).inc()
+
+    def record_upstream_resilience_event(
+        self,
+        *,
+        service: str,
+        event: str,
+    ) -> None:
+        allowed_events = {
+            "retry",
+            "circuit_open",
+            "circuit_rejected",
+            "circuit_recovered",
+        }
+
+        if event not in allowed_events:
+            raise ValueError(
+                "Unknown upstream resilience event."
+            )
+
+        self.upstream_resilience_events_total.labels(
+            service=service,
+            event=event,
         ).inc()
 
     def record_upstream_request(
@@ -447,6 +488,34 @@ def record_rate_limit_metric_best_effort(
         metrics.record_rate_limit_decision(
             scope=scope,
             decision=decision,
+        )
+    except Exception:
+        return
+
+
+def record_upstream_resilience_metric_best_effort(
+    *,
+    request: Request,
+    service: str,
+    event: str,
+) -> None:
+    """
+    Export one bounded retry/circuit event without
+    allowing monitoring failures to affect proxy
+    processing.
+    """
+
+    metrics = get_gateway_metrics(
+        request
+    )
+
+    if metrics is None:
+        return
+
+    try:
+        metrics.record_upstream_resilience_event(
+            service=service,
+            event=event,
         )
     except Exception:
         return

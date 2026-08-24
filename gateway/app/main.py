@@ -35,6 +35,13 @@ from gateway.app.observability.middleware import (
 from gateway.app.proxy.client import (
     create_http_client,
 )
+from gateway.app.proxy.registry import (
+    SERVICE_DEFINITIONS,
+)
+from gateway.app.proxy.resilience import (
+    CircuitBreakerRegistry,
+    UpstreamResilienceSettings,
+)
 from gateway.app.proxy.router import (
     router as proxy_router,
 )
@@ -79,6 +86,30 @@ async def lifespan(
 ) -> AsyncIterator[None]:
     metrics_settings = (
         MetricsSettings.from_environment()
+    )
+
+    upstream_resilience_settings = (
+        UpstreamResilienceSettings
+        .from_environment()
+    )
+
+    upstream_circuit_breakers = (
+        CircuitBreakerRegistry(
+            service_names=(
+                SERVICE_DEFINITIONS.keys()
+            ),
+            settings=(
+                upstream_resilience_settings
+            ),
+        )
+    )
+
+    app.state.upstream_resilience_settings = (
+        upstream_resilience_settings
+    )
+
+    app.state.upstream_circuit_breakers = (
+        upstream_circuit_breakers
     )
 
     metrics = GatewayMetrics()
