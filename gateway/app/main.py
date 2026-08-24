@@ -236,10 +236,11 @@ async def lifespan(
 app = FastAPI(
     title="Secure API Gateway",
     description=(
-        "API Gateway avec JWT, rate limiting "
-        "et reverse proxy."
+        "API Gateway Zero Trust avec JWT, "
+        "rate limiting, RBAC, audit de sécurité, "
+        "observabilité et reverse proxy résilient."
     ),
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
 )
 
