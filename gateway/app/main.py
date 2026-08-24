@@ -23,6 +23,12 @@ from gateway.app.database.client import (
 from gateway.app.database.config import (
     DatabaseSettings,
 )
+from gateway.app.observability.metrics import (
+    GatewayMetrics,
+    MetricsServerHandle,
+    MetricsSettings,
+    start_metrics_server,
+)
 from gateway.app.observability.middleware import (
     RequestContextMiddleware,
 )
@@ -71,6 +77,19 @@ def database_is_configured() -> bool:
 async def lifespan(
     app: FastAPI,
 ) -> AsyncIterator[None]:
+    metrics_settings = (
+        MetricsSettings.from_environment()
+    )
+
+    metrics = GatewayMetrics()
+
+    app.state.metrics = metrics
+    app.state.metrics_server = None
+
+    metrics_server: (
+        MetricsServerHandle | None
+    ) = None
+
     redis_settings = (
         RedisSettings.from_environment()
     )
@@ -104,6 +123,20 @@ async def lifespan(
     app.state.database_session_factory = None
 
     try:
+        if metrics_settings.enabled:
+            metrics_server = (
+                start_metrics_server(
+                    metrics=metrics,
+                    settings=(
+                        metrics_settings
+                    ),
+                )
+            )
+
+            app.state.metrics_server = (
+                metrics_server
+            )
+
         if database_is_configured():
             database_settings = (
                 DatabaseSettings.from_environment()
@@ -154,6 +187,11 @@ async def lifespan(
 
             yield
     finally:
+        if metrics_server is not None:
+            metrics_server.close()
+
+            app.state.metrics_server = None
+
         if database_engine is not None:
             await close_database_engine(
                 database_engine

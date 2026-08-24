@@ -244,6 +244,10 @@ services:
       REDIS_MAX_CONNECTIONS: "${REDIS_MAX_CONNECTIONS:-20}"
       REDIS_VERIFY_ON_STARTUP: "true"
 
+      METRICS_ENABLED: "${METRICS_ENABLED:-true}"
+      METRICS_HOST: "0.0.0.0"
+      METRICS_PORT: "${METRICS_PORT:-9100}"
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -256,6 +260,9 @@ services:
 
       redis:
         condition: service_healthy
+
+    expose:
+      - "9100"
 
     ports:
       - "127.0.0.1:8000:8000"

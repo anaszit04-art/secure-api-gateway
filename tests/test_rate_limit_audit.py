@@ -8,6 +8,7 @@ from typing import Iterator
 from uuid import UUID
 
 from fastapi.testclient import TestClient
+from prometheus_client import generate_latest
 
 from gateway.app.audit.dependencies import (
     get_audit_service,
@@ -424,4 +425,247 @@ def test_login_ip_rate_limit_backend_failure_is_audited_without_ip() -> None:
 
     assert event.reason_code == (
         "login_ip_rate_limit_backend_unavailable"
+    )
+
+
+def render_current_app_metrics() -> str:
+    return generate_latest(
+        app.state.metrics.registry
+    ).decode(
+        "utf-8"
+    )
+
+
+def test_proxy_rejection_updates_rate_limit_metrics() -> None:
+    limiter = FakeRateLimiter()
+
+    limiter.decision = RateLimitDecision(
+        allowed=False,
+        limit=60,
+        remaining=0,
+        retry_after_seconds=3,
+        reset_after_seconds=60,
+    )
+
+    original = (
+        app.dependency_overrides.copy()
+    )
+
+    app.dependency_overrides[
+        get_current_user
+    ] = lambda: TEST_USER
+
+    app.dependency_overrides[
+        get_authorization_service
+    ] = lambda: FakeAuthorizationService()
+
+    app.dependency_overrides[
+        get_rate_limiter
+    ] = lambda: limiter
+
+    app.dependency_overrides[
+        get_audit_service
+    ] = lambda: FakeAuditService()
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/service-a/ping"
+            )
+
+            rendered = (
+                render_current_app_metrics()
+            )
+
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(
+            original
+        )
+
+    assert response.status_code == 429
+
+    assert (
+        'gateway_rate_limit_decisions_total'
+        '{decision="rejected",scope="proxy"} '
+        '1.0'
+        in rendered
+    )
+
+    assert (
+        'gateway_security_events_total'
+        '{event_type="rate_limit_rejected",'
+        'outcome="denied"} 1.0'
+        in rendered
+    )
+
+
+def test_proxy_backend_failure_updates_unavailable_metric() -> None:
+    limiter = FakeRateLimiter()
+
+    limiter.error = RateLimitBackendError(
+        "Redis unavailable"
+    )
+
+    original = (
+        app.dependency_overrides.copy()
+    )
+
+    app.dependency_overrides[
+        get_current_user
+    ] = lambda: TEST_USER
+
+    app.dependency_overrides[
+        get_authorization_service
+    ] = lambda: FakeAuthorizationService()
+
+    app.dependency_overrides[
+        get_rate_limiter
+    ] = lambda: limiter
+
+    app.dependency_overrides[
+        get_audit_service
+    ] = lambda: FakeAuditService()
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/service-a/ping"
+            )
+
+            rendered = (
+                render_current_app_metrics()
+            )
+
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(
+            original
+        )
+
+    assert response.status_code == 503
+
+    assert (
+        'gateway_rate_limit_decisions_total'
+        '{decision="unavailable",scope="proxy"} '
+        '1.0'
+        in rendered
+    )
+
+
+def test_login_rejection_updates_rate_limit_metrics() -> None:
+    limiter = FakeRateLimiter()
+
+    limiter.decision = RateLimitDecision(
+        allowed=False,
+        limit=10,
+        remaining=0,
+        retry_after_seconds=5,
+        reset_after_seconds=50,
+    )
+
+    original = (
+        app.dependency_overrides.copy()
+    )
+
+    app.dependency_overrides[
+        get_rate_limiter
+    ] = lambda: limiter
+
+    app.dependency_overrides[
+        get_authentication_service
+    ] = lambda: FakeAuthenticationService()
+
+    app.dependency_overrides[
+        get_login_protection
+    ] = lambda: FakeLoginProtection()
+
+    app.dependency_overrides[
+        get_audit_service
+    ] = lambda: FakeAuditService()
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/auth/token",
+                data={
+                    "username": "anas",
+                    "password": "unused",
+                },
+            )
+
+            rendered = (
+                render_current_app_metrics()
+            )
+
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(
+            original
+        )
+
+    assert response.status_code == 429
+
+    assert (
+        'gateway_rate_limit_decisions_total'
+        '{decision="rejected",scope="login"} '
+        '1.0'
+        in rendered
+    )
+
+
+def test_login_backend_failure_updates_unavailable_metric() -> None:
+    limiter = FakeRateLimiter()
+
+    limiter.error = RateLimitBackendError(
+        "Redis unavailable"
+    )
+
+    original = (
+        app.dependency_overrides.copy()
+    )
+
+    app.dependency_overrides[
+        get_rate_limiter
+    ] = lambda: limiter
+
+    app.dependency_overrides[
+        get_authentication_service
+    ] = lambda: FakeAuthenticationService()
+
+    app.dependency_overrides[
+        get_login_protection
+    ] = lambda: FakeLoginProtection()
+
+    app.dependency_overrides[
+        get_audit_service
+    ] = lambda: FakeAuditService()
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/auth/token",
+                data={
+                    "username": "anas",
+                    "password": "unused",
+                },
+            )
+
+            rendered = (
+                render_current_app_metrics()
+            )
+
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(
+            original
+        )
+
+    assert response.status_code == 503
+
+    assert (
+        'gateway_rate_limit_decisions_total'
+        '{decision="unavailable",scope="login"} '
+        '1.0'
+        in rendered
     )

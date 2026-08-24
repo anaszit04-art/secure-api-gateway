@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import Annotated
 
 import httpx
@@ -14,6 +15,10 @@ from fastapi import (
     Response,
 )
 
+from gateway.app.observability.metrics import (
+    record_upstream_metric_best_effort,
+    status_class,
+)
 from gateway.app.proxy.headers import (
     filter_request_headers,
     filter_response_headers,
@@ -127,6 +132,10 @@ async def proxy_request(
         request.app.state.http_client
     )
 
+    upstream_started_at = (
+        perf_counter()
+    )
+
     try:
         upstream_response = (
             await http_client.request(
@@ -141,18 +150,50 @@ async def proxy_request(
         )
 
     except httpx.TimeoutException as exc:
+        record_upstream_metric_best_effort(
+            request=request,
+            service=service_name,
+            outcome="timeout",
+            duration_seconds=(
+                perf_counter()
+                - upstream_started_at
+            ),
+        )
+
         raise HTTPException(
             status_code=504,
             detail="Upstream service timeout",
         ) from exc
 
     except httpx.RequestError as exc:
+        record_upstream_metric_best_effort(
+            request=request,
+            service=service_name,
+            outcome="unavailable",
+            duration_seconds=(
+                perf_counter()
+                - upstream_started_at
+            ),
+        )
+
         raise HTTPException(
             status_code=502,
             detail=(
                 "Upstream service unavailable"
             ),
         ) from exc
+
+    record_upstream_metric_best_effort(
+        request=request,
+        service=service_name,
+        outcome=status_class(
+            upstream_response.status_code
+        ),
+        duration_seconds=(
+            perf_counter()
+            - upstream_started_at
+        ),
+    )
 
     response_headers = (
         filter_response_headers(

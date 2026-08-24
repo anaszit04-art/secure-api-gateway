@@ -27,6 +27,9 @@ from gateway.app.audit.service import (
 from gateway.app.database.audit_repository import (
     PostgreSQLAuditRepository,
 )
+from gateway.app.observability.metrics import (
+    record_security_metric_best_effort,
+)
 
 
 def get_audit_service(
@@ -174,6 +177,12 @@ async def record_request_security_event(
         method=method,
         status_code=status_code,
         reason_code=reason_code,
+    )
+
+    record_security_metric_best_effort(
+        request=request,
+        event_type=event.event_type.value,
+        outcome=event.outcome.value,
     )
 
     await record_security_event_best_effort(

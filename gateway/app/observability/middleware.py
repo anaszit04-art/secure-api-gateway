@@ -15,6 +15,9 @@ from starlette.responses import Response
 from gateway.app.observability.logging import (
     get_request_logger,
 )
+from gateway.app.observability.metrics import (
+    GatewayMetrics,
+)
 
 
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -122,25 +125,44 @@ class RequestContextMiddleware(
             )
 
         except Exception:
+            duration_seconds = (
+                perf_counter()
+                - started_at
+            )
+
             duration_ms = round(
-                (
-                    perf_counter()
-                    - started_at
-                )
-                * 1000,
+                duration_seconds * 1000,
                 3,
             )
+
+            route = resolve_route_template(
+                request
+            )
+
+            metrics: GatewayMetrics | None = (
+                getattr(
+                    request.app.state,
+                    "metrics",
+                    None,
+                )
+            )
+
+            if metrics is not None:
+                metrics.record_http_request(
+                    method=request.method,
+                    route=route,
+                    status_code=500,
+                    duration_seconds=(
+                        duration_seconds
+                    ),
+                )
 
             emit_request_log(
                 logger=logger,
                 event="request_failed",
                 request_id=request_id,
                 method=request.method,
-                route=(
-                    resolve_route_template(
-                        request
-                    )
-                ),
+                route=route,
                 status_code=500,
                 duration_ms=duration_ms,
             )
@@ -151,25 +173,46 @@ class RequestContextMiddleware(
             REQUEST_ID_HEADER
         ] = request_id
 
+        duration_seconds = (
+            perf_counter()
+            - started_at
+        )
+
         duration_ms = round(
-            (
-                perf_counter()
-                - started_at
-            )
-            * 1000,
+            duration_seconds * 1000,
             3,
         )
+
+        route = resolve_route_template(
+            request
+        )
+
+        metrics: GatewayMetrics | None = (
+            getattr(
+                request.app.state,
+                "metrics",
+                None,
+            )
+        )
+
+        if metrics is not None:
+            metrics.record_http_request(
+                method=request.method,
+                route=route,
+                status_code=(
+                    response.status_code
+                ),
+                duration_seconds=(
+                    duration_seconds
+                ),
+            )
 
         emit_request_log(
             logger=logger,
             event="request_completed",
             request_id=request_id,
             method=request.method,
-            route=(
-                resolve_route_template(
-                    request
-                )
-            ),
+            route=route,
             status_code=(
                 response.status_code
             ),

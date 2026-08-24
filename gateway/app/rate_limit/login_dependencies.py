@@ -17,6 +17,9 @@ from gateway.app.audit.models import (
     AuditEventType,
     AuditOutcome,
 )
+from gateway.app.observability.metrics import (
+    record_rate_limit_metric_best_effort,
+)
 from gateway.app.rate_limit.dependencies import (
     build_rate_limit_headers,
     get_rate_limiter,
@@ -192,6 +195,12 @@ async def enforce_login_ip_rate_limit(
         )
 
     except RateLimitBackendError as exc:
+        record_rate_limit_metric_best_effort(
+            request=request,
+            scope="login",
+            decision="unavailable",
+        )
+
         await record_request_security_event(
             request=request,
             audit_service=audit_service,
@@ -210,6 +219,16 @@ async def enforce_login_ip_rate_limit(
         raise (
             authentication_protection_unavailable()
         ) from exc
+
+    record_rate_limit_metric_best_effort(
+        request=request,
+        scope="login",
+        decision=(
+            "allowed"
+            if decision.allowed
+            else "rejected"
+        ),
+    )
 
     if not decision.allowed:
         await record_request_security_event(

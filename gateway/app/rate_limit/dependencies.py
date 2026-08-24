@@ -23,6 +23,9 @@ from gateway.app.auth.dependencies import (
 from gateway.app.auth.models import (
     UserPublic,
 )
+from gateway.app.observability.metrics import (
+    record_rate_limit_metric_best_effort,
+)
 from gateway.app.rate_limit.models import (
     RateLimitDecision,
     RateLimitPolicy,
@@ -149,6 +152,12 @@ async def enforce_proxy_rate_limit(
         )
 
     except RateLimitBackendError as exc:
+        record_rate_limit_metric_best_effort(
+            request=request,
+            scope="proxy",
+            decision="unavailable",
+        )
+
         await record_request_security_event(
             request=request,
             audit_service=audit_service,
@@ -178,6 +187,16 @@ async def enforce_proxy_rate_limit(
                 "Retry-After": "1",
             },
         ) from exc
+
+    record_rate_limit_metric_best_effort(
+        request=request,
+        scope="proxy",
+        decision=(
+            "allowed"
+            if decision.allowed
+            else "rejected"
+        ),
+    )
 
     if not decision.allowed:
         await record_request_security_event(
