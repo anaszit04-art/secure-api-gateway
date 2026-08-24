@@ -16,7 +16,7 @@ from gateway.app.observability.logging import (
     get_request_logger,
 )
 from gateway.app.observability.metrics import (
-    GatewayMetrics,
+    record_http_metric_best_effort,
 )
 
 
@@ -90,6 +90,41 @@ def emit_request_log(
     )
 
 
+def emit_request_log_best_effort(
+    *,
+    event: str,
+    request_id: str,
+    method: str,
+    route: str,
+    status_code: int,
+    duration_ms: float,
+) -> None:
+    """
+    Emit operational telemetry without allowing
+    logger construction, formatting or output failures
+    to alter application behaviour.
+
+    Logging is observability, not a business or
+    security decision dependency.
+    """
+
+    try:
+        logger = get_request_logger()
+
+        emit_request_log(
+            logger=logger,
+            event=event,
+            request_id=request_id,
+            method=method,
+            route=route,
+            status_code=status_code,
+            duration_ms=duration_ms,
+        )
+
+    except Exception:
+        return
+
+
 class RequestContextMiddleware(
     BaseHTTPMiddleware
 ):
@@ -117,8 +152,6 @@ class RequestContextMiddleware(
 
         started_at = perf_counter()
 
-        logger = get_request_logger()
-
         try:
             response = await call_next(
                 request
@@ -139,26 +172,17 @@ class RequestContextMiddleware(
                 request
             )
 
-            metrics: GatewayMetrics | None = (
-                getattr(
-                    request.app.state,
-                    "metrics",
-                    None,
-                )
+            record_http_metric_best_effort(
+                request=request,
+                method=request.method,
+                route=route,
+                status_code=500,
+                duration_seconds=(
+                    duration_seconds
+                ),
             )
 
-            if metrics is not None:
-                metrics.record_http_request(
-                    method=request.method,
-                    route=route,
-                    status_code=500,
-                    duration_seconds=(
-                        duration_seconds
-                    ),
-                )
-
-            emit_request_log(
-                logger=logger,
+            emit_request_log_best_effort(
                 event="request_failed",
                 request_id=request_id,
                 method=request.method,
@@ -187,28 +211,19 @@ class RequestContextMiddleware(
             request
         )
 
-        metrics: GatewayMetrics | None = (
-            getattr(
-                request.app.state,
-                "metrics",
-                None,
-            )
+        record_http_metric_best_effort(
+            request=request,
+            method=request.method,
+            route=route,
+            status_code=(
+                response.status_code
+            ),
+            duration_seconds=(
+                duration_seconds
+            ),
         )
 
-        if metrics is not None:
-            metrics.record_http_request(
-                method=request.method,
-                route=route,
-                status_code=(
-                    response.status_code
-                ),
-                duration_seconds=(
-                    duration_seconds
-                ),
-            )
-
-        emit_request_log(
-            logger=logger,
+        emit_request_log_best_effort(
             event="request_completed",
             request_id=request_id,
             method=request.method,

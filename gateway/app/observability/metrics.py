@@ -159,6 +159,44 @@ class MetricsSettings:
         )
 
 
+BOUNDED_HTTP_METHODS: Final[
+    frozenset[str]
+] = frozenset(
+    {
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "TRACE",
+        "CONNECT",
+    }
+)
+
+
+def normalize_http_method(
+    method: str,
+) -> str:
+    """
+    Map client-controlled HTTP methods to a bounded
+    Prometheus label set.
+
+    Arbitrary extension methods must never create
+    attacker-controlled metric cardinality.
+    """
+
+    normalized = (
+        method.strip().upper()
+    )
+
+    if normalized in BOUNDED_HTTP_METHODS:
+        return normalized
+
+    return "OTHER"
+
+
 def status_class(
     status_code: int,
 ) -> str:
@@ -326,7 +364,9 @@ class GatewayMetrics:
         duration_seconds: float,
     ) -> None:
         normalized_method = (
-            method.upper()
+            normalize_http_method(
+                method
+            )
         )
 
         self.http_requests_total.labels(
@@ -438,6 +478,41 @@ def get_gateway_metrics(
         return None
 
     return metrics
+
+
+def record_http_metric_best_effort(
+    *,
+    request: Request,
+    method: str,
+    route: str,
+    status_code: int,
+    duration_seconds: float,
+) -> None:
+    """
+    Record HTTP telemetry without allowing an
+    observability failure to alter the application
+    response or mask the original exception.
+    """
+
+    metrics = get_gateway_metrics(
+        request
+    )
+
+    if metrics is None:
+        return
+
+    try:
+        metrics.record_http_request(
+            method=method,
+            route=route,
+            status_code=status_code,
+            duration_seconds=(
+                duration_seconds
+            ),
+        )
+
+    except Exception:
+        return
 
 
 def record_security_metric_best_effort(

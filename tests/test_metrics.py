@@ -496,3 +496,33 @@ def test_upstream_resilience_metric_is_bounded() -> None:
     assert "path=" not in rendered
     assert "request_id=" not in rendered
     assert "user_id=" not in rendered
+
+
+def test_arbitrary_http_method_is_normalized_to_other() -> None:
+    metrics = GatewayMetrics()
+
+    attacker_method = (
+        "X-CUSTOM-ATTACK-"
+        "7f8d5b4c"
+    )
+
+    metrics.record_http_request(
+        method=attacker_method,
+        route="<unmatched>",
+        status_code=405,
+        duration_seconds=0.001,
+    )
+
+    rendered = render(
+        metrics
+    )
+
+    assert (
+        'method="OTHER"'
+        in rendered
+    )
+
+    assert (
+        attacker_method
+        not in rendered
+    )
