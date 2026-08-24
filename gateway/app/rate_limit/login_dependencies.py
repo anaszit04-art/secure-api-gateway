@@ -9,6 +9,14 @@ from fastapi import (
     status,
 )
 
+from gateway.app.audit.dependencies import (
+    AuditServiceDependency,
+    record_request_security_event,
+)
+from gateway.app.audit.models import (
+    AuditEventType,
+    AuditOutcome,
+)
 from gateway.app.rate_limit.dependencies import (
     build_rate_limit_headers,
     get_rate_limiter,
@@ -163,9 +171,14 @@ async def enforce_login_ip_rate_limit(
         RateLimitPolicy,
         Depends(get_login_ip_policy),
     ],
+    audit_service: AuditServiceDependency,
 ) -> RateLimitDecision:
     """
     Apply a token bucket to the direct client address.
+
+    The direct address is used only as the Redis
+    identity. It is deliberately excluded from the
+    security audit event.
     """
 
     identity = get_direct_client_address(
@@ -177,12 +190,42 @@ async def enforce_login_ip_rate_limit(
             identity=identity,
             policy=policy,
         )
+
     except RateLimitBackendError as exc:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType
+                .RATE_LIMIT_BACKEND_UNAVAILABLE
+            ),
+            outcome=AuditOutcome.UNAVAILABLE,
+            method=request.method,
+            status_code=503,
+            reason_code=(
+                "login_ip_rate_limit_backend_unavailable"
+            ),
+        )
+
         raise (
             authentication_protection_unavailable()
         ) from exc
 
     if not decision.allowed:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType.RATE_LIMIT_REJECTED
+            ),
+            outcome=AuditOutcome.DENIED,
+            method=request.method,
+            status_code=429,
+            reason_code=(
+                "login_ip_rate_limit_exceeded"
+            ),
+        )
+
         raise too_many_authentication_attempts(
             retry_after_seconds=(
                 decision.retry_after_seconds

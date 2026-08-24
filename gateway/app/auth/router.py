@@ -10,6 +10,14 @@ from fastapi import (
 )
 from fastapi.security import OAuth2PasswordRequestForm
 
+from gateway.app.audit.dependencies import (
+    AuditServiceDependency,
+    record_request_security_event,
+)
+from gateway.app.audit.models import (
+    AuditEventType,
+    AuditOutcome,
+)
 from gateway.app.auth.dependencies import (
     authentication_database_unavailable,
     get_authentication_service,
@@ -64,19 +72,22 @@ router = APIRouter(
 )
 async def register_user(
     registration: UserRegistration,
+    request: Request,
     service: Annotated[
         AuthenticationService,
         Depends(get_authentication_service),
     ],
+    audit_service: AuditServiceDependency,
 ) -> UserPublic:
     """
     Register a new local user.
     """
 
     try:
-        return await service.register_user(
+        user = await service.register_user(
             registration
         )
+
     except UserAlreadyExistsError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -86,9 +97,39 @@ async def register_user(
         ) from exc
 
     except UserRepositoryBackendError as exc:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType
+                .AUTHENTICATION_BACKEND_UNAVAILABLE
+            ),
+            outcome=AuditOutcome.UNAVAILABLE,
+            method=request.method,
+            status_code=503,
+            reason_code=(
+                "registration_repository_unavailable"
+            ),
+        )
+
         raise (
             authentication_database_unavailable()
         ) from exc
+
+    await record_request_security_event(
+        request=request,
+        audit_service=audit_service,
+        event_type=(
+            AuditEventType.USER_REGISTERED
+        ),
+        outcome=AuditOutcome.SUCCESS,
+        target_user_id=user.id,
+        method=request.method,
+        status_code=201,
+        reason_code="registration_completed",
+    )
+
+    return user
 
 
 @router.post(
@@ -118,6 +159,7 @@ async def issue_access_token(
         LoginProtectionPolicy,
         Depends(get_account_login_policy),
     ],
+    audit_service: AuditServiceDependency,
 ) -> TokenResponse:
     """
     Authenticate credentials and issue a Bearer token.
@@ -130,8 +172,6 @@ async def issue_access_token(
     4. record failures or clear state after success.
     """
 
-    del request
-
     try:
         lock_decision = (
             await login_protection.check_lock(
@@ -139,12 +179,40 @@ async def issue_access_token(
                 policy=account_policy,
             )
         )
+
     except LoginProtectionBackendError as exc:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType
+                .RATE_LIMIT_BACKEND_UNAVAILABLE
+            ),
+            outcome=AuditOutcome.UNAVAILABLE,
+            method=request.method,
+            status_code=503,
+            reason_code=(
+                "login_lock_check_unavailable"
+            ),
+        )
+
         raise (
             authentication_protection_unavailable()
         ) from exc
 
     if lock_decision.locked:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType.ACCOUNT_LOCKED
+            ),
+            outcome=AuditOutcome.DENIED,
+            method=request.method,
+            status_code=429,
+            reason_code="account_already_locked",
+        )
+
         raise too_many_authentication_attempts(
             retry_after_seconds=(
                 lock_decision.retry_after_seconds
@@ -152,18 +220,47 @@ async def issue_access_token(
         )
 
     try:
-        access_token = (
-            await service.authenticate_and_create_token(
+        authentication_result = (
+            await service
+            .authenticate_and_create_result(
                 username=form_data.username,
                 password=form_data.password,
             )
         )
+
     except UserRepositoryBackendError as exc:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType
+                .AUTHENTICATION_BACKEND_UNAVAILABLE
+            ),
+            outcome=AuditOutcome.UNAVAILABLE,
+            method=request.method,
+            status_code=503,
+            reason_code=(
+                "authentication_repository_unavailable"
+            ),
+        )
+
         raise (
             authentication_database_unavailable()
         ) from exc
 
     except AuthenticationError as exc:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType.LOGIN_FAILED
+            ),
+            outcome=AuditOutcome.FAILURE,
+            method=request.method,
+            status_code=401,
+            reason_code="invalid_credentials",
+        )
+
         try:
             failure_decision = (
                 await login_protection.record_failure(
@@ -173,12 +270,42 @@ async def issue_access_token(
                     policy=account_policy,
                 )
             )
+
         except LoginProtectionBackendError as backend_exc:
+            await record_request_security_event(
+                request=request,
+                audit_service=audit_service,
+                event_type=(
+                    AuditEventType
+                    .RATE_LIMIT_BACKEND_UNAVAILABLE
+                ),
+                outcome=AuditOutcome.UNAVAILABLE,
+                method=request.method,
+                status_code=503,
+                reason_code=(
+                    "login_failure_tracking_unavailable"
+                ),
+            )
+
             raise (
                 authentication_protection_unavailable()
             ) from backend_exc
 
         if failure_decision.locked:
+            await record_request_security_event(
+                request=request,
+                audit_service=audit_service,
+                event_type=(
+                    AuditEventType.ACCOUNT_LOCKED
+                ),
+                outcome=AuditOutcome.DENIED,
+                method=request.method,
+                status_code=429,
+                reason_code=(
+                    "failure_threshold_reached"
+                ),
+            )
+
             raise too_many_authentication_attempts(
                 retry_after_seconds=(
                     failure_decision
@@ -209,7 +336,23 @@ async def issue_access_token(
             identifier=form_data.username,
             policy=account_policy,
         )
+
     except LoginProtectionBackendError as exc:
+        await record_request_security_event(
+            request=request,
+            audit_service=audit_service,
+            event_type=(
+                AuditEventType
+                .RATE_LIMIT_BACKEND_UNAVAILABLE
+            ),
+            outcome=AuditOutcome.UNAVAILABLE,
+            method=request.method,
+            status_code=503,
+            reason_code=(
+                "login_state_reset_unavailable"
+            ),
+        )
+
         raise (
             authentication_protection_unavailable()
         ) from exc
@@ -223,8 +366,26 @@ async def issue_access_token(
             header_name
         ] = header_value
 
+    await record_request_security_event(
+        request=request,
+        audit_service=audit_service,
+        event_type=(
+            AuditEventType.LOGIN_SUCCEEDED
+        ),
+        outcome=AuditOutcome.SUCCESS,
+        actor_user_id=(
+            authentication_result.user.id
+        ),
+        method=request.method,
+        status_code=200,
+        reason_code="credentials_verified",
+    )
+
     return TokenResponse(
-        access_token=access_token,
+        access_token=(
+            authentication_result
+            .access_token
+        ),
     )
 
 

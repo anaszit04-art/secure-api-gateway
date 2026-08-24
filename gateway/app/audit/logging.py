@@ -213,3 +213,90 @@ def emit_security_audit_event(
             )
         ),
     )
+
+
+AUDIT_PERSISTENCE_LOGGER_NAME: Final[str] = (
+    "gateway.audit.persistence"
+)
+
+
+def get_audit_persistence_logger() -> logging.Logger:
+    """
+    Return the dedicated logger used when an audit
+    event was observable but could not be persisted.
+
+    This logger remains separate from the normal
+    security-event logger so operators can distinguish
+    a security event from an audit-storage failure.
+    """
+
+    logger = logging.getLogger(
+        AUDIT_PERSISTENCE_LOGGER_NAME
+    )
+
+    handler_exists = any(
+        getattr(
+            handler,
+            "_gateway_audit_persistence_handler",
+            False,
+        )
+        for handler in logger.handlers
+    )
+
+    if not handler_exists:
+        handler = logging.StreamHandler()
+
+        handler.setFormatter(
+            AuditJsonFormatter()
+        )
+
+        setattr(
+            handler,
+            "_gateway_audit_persistence_handler",
+            True,
+        )
+
+        logger.addHandler(
+            handler
+        )
+
+    logger.setLevel(
+        logging.WARNING
+    )
+
+    logger.propagate = False
+
+    return logger
+
+
+def emit_audit_persistence_failure(
+    event: SecurityAuditEvent,
+) -> None:
+    """
+    Emit a bounded operational warning when the
+    security event could not be stored persistently.
+
+    The original audit event has already been emitted
+    by AuditService before persistence is attempted.
+    """
+
+    logger = get_audit_persistence_logger()
+
+    logger.warning(
+        "audit_persistence_unavailable",
+        extra={
+            "event_id": str(
+                event.event_id
+            ),
+            "event_type": (
+                event.event_type.value
+            ),
+            "outcome": "unavailable",
+            "request_id": str(
+                event.request_id
+            ),
+            "reason_code": (
+                "audit_persistence_unavailable"
+            ),
+        },
+    )

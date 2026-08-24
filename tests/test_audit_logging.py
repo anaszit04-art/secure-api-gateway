@@ -112,3 +112,103 @@ def test_audit_json_formatter_ignores_arbitrary_sensitive_fields() -> None:
         "super-secret-token"
         not in rendered
     )
+
+
+def test_audit_persistence_warning_uses_bounded_fields() -> None:
+    from gateway.app.audit.logging import (
+        emit_audit_persistence_failure,
+        get_audit_persistence_logger,
+    )
+
+    event = create_security_audit_event(
+        event_type=(
+            AuditEventType.ROLE_ASSIGNED
+        ),
+        outcome=AuditOutcome.SUCCESS,
+        request_id=uuid4(),
+        actor_user_id=uuid4(),
+        target_user_id=uuid4(),
+        role_name="operator",
+        status_code=200,
+    )
+
+    captured = []
+
+    class CaptureHandler(
+        logging.Handler
+    ):
+        def emit(
+            self,
+            record: logging.LogRecord,
+        ) -> None:
+            captured.append(
+                json.loads(
+                    AuditJsonFormatter()
+                    .format(
+                        record
+                    )
+                )
+            )
+
+    logger = (
+        get_audit_persistence_logger()
+    )
+
+    original_handlers = list(
+        logger.handlers
+    )
+
+    logger.handlers.clear()
+
+    logger.addHandler(
+        CaptureHandler()
+    )
+
+    try:
+        emit_audit_persistence_failure(
+            event
+        )
+
+    finally:
+        logger.handlers.clear()
+
+        for handler in original_handlers:
+            logger.addHandler(
+                handler
+            )
+
+    assert len(captured) == 1
+
+    payload = captured[0]
+
+    assert payload["level"] == (
+        "WARNING"
+    )
+
+    assert payload["logger"] == (
+        "gateway.audit.persistence"
+    )
+
+    assert payload["message"] == (
+        "audit_persistence_unavailable"
+    )
+
+    assert payload["event_type"] == (
+        "role_assigned"
+    )
+
+    assert payload["outcome"] == (
+        "unavailable"
+    )
+
+    assert payload["reason_code"] == (
+        "audit_persistence_unavailable"
+    )
+
+    rendered = json.dumps(
+        payload
+    )
+
+    assert "password" not in rendered
+    assert "Authorization" not in rendered
+    assert "Bearer " not in rendered
