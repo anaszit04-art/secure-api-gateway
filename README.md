@@ -1279,6 +1279,54 @@ Inspection des clés Redis :
 Les noms d'utilisateur, UUID et adresses IP ne doivent pas
 apparaître en clair dans les clés Redis.
 
+## Intégration continue
+
+Le projet possède un pipeline GitHub Actions dans :
+
+    .github/workflows/ci.yml
+
+Le pipeline s'exécute lors des push, pull requests et
+déclenchements manuels.
+
+Il est composé de trois jobs indépendants.
+
+Le job `quality` :
+
+- installe les dépendances runtime et développement ;
+- vérifie les dépendances avec `pip check` ;
+- compile les sources Python ;
+- exécute les contrôles Ruff critiques ;
+- lance l'intégralité de la suite Pytest.
+
+Le job `database` démarre une instance PostgreSQL éphémère,
+applique toutes les migrations Alembic depuis une base vide,
+vérifie qu'il existe un unique head et détecte tout drift entre
+les modèles SQLAlchemy et les migrations.
+
+Le job `container` :
+
+- valide Docker Compose ;
+- construit l'image Gateway ;
+- vérifie l'utilisateur non-root ;
+- vérifie que les secrets runtime ne sont pas intégrés à
+  l'image ou à son historique ;
+- vérifie les exclusions du build context ;
+- bloque le pipeline si `.env` est tracké ;
+- exige que les secrets de `.env.example` restent vides.
+
+La CI utilise uniquement des credentials éphémères de test.
+Aucun secret de production n'est stocké dans le workflow.
+
+Les contrôles Ruff sont volontairement limités aux catégories
+d'erreurs critiques. La Phase 7 n'impose pas un reformatage
+global du code historique.
+
+La livraison vers une infrastructure externe n'est pas
+automatisée car aucune cible de déploiement production n'est
+définie dans ce projet. Le pipeline automatise donc la
+validation, les migrations et la construction de l'artefact
+Docker sans prétendre effectuer un déploiement inexistant.
+
 ## Limites actuelles
 
 - `/health` représente actuellement uniquement la liveness ;
