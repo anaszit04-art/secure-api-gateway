@@ -874,6 +874,68 @@ Une panne d'observabilité ne doit pas modifier une réponse
 métier déjà calculée et ne doit pas masquer une exception
 applicative originale.
 
+## Liveness et readiness
+
+La Gateway distingue explicitement la liveness de la
+readiness.
+
+La route :
+
+    GET /health
+
+est une sonde de liveness. Elle confirme uniquement que le
+processus HTTP de la Gateway fonctionne et retourne :
+
+    HTTP 200
+    {"status":"ok"}
+
+Elle ne contacte ni PostgreSQL, ni Redis, ni les services
+upstream. Cette séparation évite qu'une indisponibilité de
+dépendance entraîne un redémarrage inutile du processus.
+
+La route :
+
+    GET /ready
+
+est une sonde de readiness destinée à déterminer si la Gateway
+peut accepter du trafic nécessitant ses dépendances critiques.
+
+Elle vérifie en parallèle :
+
+    PostgreSQL
+    Redis
+
+Lorsque les deux dépendances sont disponibles :
+
+    HTTP 200
+
+avec un état normalisé `ready`.
+
+Lorsqu'au moins une dépendance critique n'est pas disponible :
+
+    HTTP 503
+
+avec un état normalisé `not_ready`.
+
+Les messages d'exception, URLs, hôtes, ports et informations de
+connexion ne sont jamais exposés dans la réponse.
+
+Chaque contrôle est borné dans le temps afin qu'une dépendance
+bloquée ne puisse pas immobiliser indéfiniment la sonde.
+
+Les services `service-a` et `service-b` ne participent
+volontairement pas à la readiness globale. Leur disponibilité
+est gérée indépendamment par les circuit breakers de la
+Gateway. La panne d'un service ne doit donc pas retirer
+l'ensemble de la Gateway du trafic.
+
+Le serveur Prometheus ne participe pas non plus à la readiness,
+car l'observabilité suit une politique best-effort.
+
+Le healthcheck Docker de la Gateway continue à utiliser
+`/health` et non `/ready`. La liveness ne doit pas être couplée
+à l'état temporaire de PostgreSQL ou Redis.
+
 ## Prérequis
 
 - Python 3.13 ;
@@ -1169,7 +1231,7 @@ apparaître en clair dans les clés Redis.
 ## Limites actuelles
 
 - `/health` représente actuellement uniquement la liveness ;
-- aucune route de readiness complète n'est encore exposée ;
+- la readiness `/ready` vérifie PostgreSQL et Redis ; les services upstream restent volontairement hors de cette décision afin de préserver leur isolation par circuit breaker ;
 - Redis ne possède volontairement aucune persistance disque ;
 - le bootstrap du tout premier administrateur reste une opération
   contrôlée côté infrastructure/base de données ;

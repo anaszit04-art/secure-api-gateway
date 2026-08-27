@@ -5,7 +5,12 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import (
+    FastAPI,
+    Request,
+    status,
+)
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from gateway.app.auth.router import (
@@ -44,6 +49,9 @@ from gateway.app.proxy.resilience import (
 )
 from gateway.app.proxy.router import (
     router as proxy_router,
+)
+from gateway.app.readiness import (
+    evaluate_readiness,
 )
 from gateway.app.rate_limit.client import (
     close_redis_client,
@@ -261,3 +269,44 @@ async def health() -> dict[str, str]:
     return {
         "status": "ok",
     }
+
+
+@app.get(
+    "/ready",
+    tags=["System"],
+    responses={
+        503: {
+            "description": (
+                "Gateway dependencies "
+                "are unavailable."
+            ),
+        },
+    },
+)
+async def ready(
+    request: Request,
+) -> JSONResponse:
+    report = await evaluate_readiness(
+        database_engine=getattr(
+            request.app.state,
+            "database_engine",
+            None,
+        ),
+        redis_client=getattr(
+            request.app.state,
+            "redis_client",
+            None,
+        ),
+    )
+
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if report.ready
+            else (
+                status
+                .HTTP_503_SERVICE_UNAVAILABLE
+            )
+        ),
+        content=report.as_payload(),
+    )
