@@ -560,3 +560,151 @@ def test_readiness_dependency_check_is_bounded(
         == "unavailable"
     )
     assert report.redis == "ok"
+
+
+def test_ready_logs_only_unavailable_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_test_runtime(
+        monkeypatch
+    )
+
+    async def database_unavailable(
+        _: object,
+    ) -> None:
+        raise RuntimeError(
+            "database diagnostic must stay hidden"
+        )
+
+    async def redis_ok(
+        _: object,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        readiness_module,
+        "verify_database_connection",
+        database_unavailable,
+    )
+
+    monkeypatch.setattr(
+        readiness_module,
+        "verify_redis_connection",
+        redis_ok,
+    )
+
+    observed: list[
+        dict[str, str]
+    ] = []
+
+    def capture_log(
+        *,
+        request_id: str,
+        dependency: str,
+    ) -> None:
+        observed.append(
+            {
+                "request_id": request_id,
+                "dependency": dependency,
+            }
+        )
+
+    monkeypatch.setattr(
+        main_module,
+        "emit_readiness_dependency_log_best_effort",
+        capture_log,
+    )
+
+    with TestClient(
+        main_module.app
+    ) as client:
+        install_runtime_dependencies()
+
+        response = client.get(
+            "/ready"
+        )
+
+    assert response.status_code == 503
+
+    assert response.json() == {
+        "status": "not_ready",
+        "checks": {
+            "database": "unavailable",
+            "redis": "ok",
+        },
+    }
+
+    assert observed == [
+        {
+            "request_id": (
+                response.headers[
+                    "x-request-id"
+                ]
+            ),
+            "dependency": "database",
+        }
+    ]
+
+
+def test_ready_does_not_emit_dependency_log_when_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_test_runtime(
+        monkeypatch
+    )
+
+    async def database_ok(
+        _: object,
+    ) -> None:
+        return None
+
+    async def redis_ok(
+        _: object,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        readiness_module,
+        "verify_database_connection",
+        database_ok,
+    )
+
+    monkeypatch.setattr(
+        readiness_module,
+        "verify_redis_connection",
+        redis_ok,
+    )
+
+    observed: list[
+        dict[str, str]
+    ] = []
+
+    def capture_log(
+        *,
+        request_id: str,
+        dependency: str,
+    ) -> None:
+        observed.append(
+            {
+                "request_id": request_id,
+                "dependency": dependency,
+            }
+        )
+
+    monkeypatch.setattr(
+        main_module,
+        "emit_readiness_dependency_log_best_effort",
+        capture_log,
+    )
+
+    with TestClient(
+        main_module.app
+    ) as client:
+        install_runtime_dependencies()
+
+        response = client.get(
+            "/ready"
+        )
+
+    assert response.status_code == 200
+    assert observed == []

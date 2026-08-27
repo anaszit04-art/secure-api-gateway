@@ -1327,6 +1327,16 @@ définie dans ce projet. Le pipeline automatise donc la
 validation, les migrations et la construction de l'artefact
 Docker sans prétendre effectuer un déploiement inexistant.
 
+## Runbook d'exploitation
+
+Les procédures opérationnelles de production sont regroupées
+dans [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+Le runbook couvre la liveness, la readiness, les logs JSON,
+la corrélation par request ID, Prometheus, Redis, PostgreSQL,
+les incidents upstream, la rotation des logs et les critères
+de récupération.
+
 ## Validation charge et résilience Phase 7
 
 La validation finale de production inclut des scénarios de

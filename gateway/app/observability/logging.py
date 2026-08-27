@@ -15,6 +15,16 @@ REQUEST_LOGGER_NAME: Final[str] = (
 )
 
 
+READINESS_DEPENDENCIES: Final[
+    frozenset[str]
+] = frozenset(
+    {
+        "database",
+        "redis",
+    }
+)
+
+
 STRUCTURED_FIELDS: Final[
     tuple[str, ...]
 ] = (
@@ -24,6 +34,8 @@ STRUCTURED_FIELDS: Final[
     "route",
     "status_code",
     "duration_ms",
+    "dependency",
+    "dependency_status",
 )
 
 
@@ -123,3 +135,49 @@ def get_request_logger() -> logging.Logger:
     logger.propagate = False
 
     return logger
+
+def emit_readiness_dependency_log_best_effort(
+    *,
+    request_id: str,
+    dependency: str,
+) -> None:
+    """
+    Emit one bounded readiness dependency event.
+
+    Only fixed dependency names are accepted. Raw
+    infrastructure exceptions, connection strings,
+    hosts and credentials are never included.
+
+    Observability remains best-effort and therefore
+    cannot change the HTTP readiness decision.
+    """
+
+    if (
+        dependency
+        not in READINESS_DEPENDENCIES
+    ):
+        return
+
+    try:
+        logger = get_request_logger()
+
+        logger.warning(
+            "readiness_dependency_unavailable",
+            extra={
+                "event": (
+                    "readiness_dependency_unavailable"
+                ),
+                "request_id": request_id,
+                "method": "GET",
+                "route": "/ready",
+                "status_code": 503,
+                "dependency": dependency,
+                "dependency_status": (
+                    "unavailable"
+                ),
+            },
+        )
+
+    except Exception:
+        return
+

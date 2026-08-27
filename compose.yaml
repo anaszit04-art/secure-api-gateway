@@ -1,6 +1,13 @@
 name: secure-api-gateway
 
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+
 x-python-service: &python-service
   build:
     context: .
@@ -10,6 +17,8 @@ x-python-service: &python-service
 
   init: true
   restart: unless-stopped
+
+  logging: *default-logging
 
   read_only: true
 
@@ -39,6 +48,7 @@ services:
       - 0.0.0.0
       - --port
       - "8001"
+      - --no-access-log
 
     expose:
       - "8001"
@@ -72,6 +82,7 @@ services:
       - 0.0.0.0
       - --port
       - "8002"
+      - --no-access-log
 
     expose:
       - "8002"
@@ -99,6 +110,8 @@ services:
 
     init: true
     restart: unless-stopped
+
+    logging: *default-logging
 
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-gateway}"
@@ -137,6 +150,8 @@ services:
     init: true
     user: redis
     restart: unless-stopped
+
+    logging: *default-logging
 
     command:
       - redis-server
@@ -217,6 +232,7 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+      - --no-access-log
 
     environment:
       SERVICE_A_URL: "${SERVICE_A_URL:-http://service-a:8001}"

@@ -28,6 +28,9 @@ from gateway.app.database.client import (
 from gateway.app.database.config import (
     DatabaseSettings,
 )
+from gateway.app.observability.logging import (
+    emit_readiness_dependency_log_best_effort,
+)
 from gateway.app.observability.metrics import (
     GatewayMetrics,
     MetricsServerHandle,
@@ -298,6 +301,41 @@ async def ready(
             None,
         ),
     )
+
+    if not report.ready:
+        request_id = getattr(
+            request.state,
+            "request_id",
+            None,
+        )
+
+        if isinstance(
+            request_id,
+            str,
+        ):
+            for (
+                dependency,
+                dependency_status,
+            ) in (
+                (
+                    "database",
+                    report.database,
+                ),
+                (
+                    "redis",
+                    report.redis,
+                ),
+            ):
+                if (
+                    dependency_status
+                    == "unavailable"
+                ):
+                    (
+                        emit_readiness_dependency_log_best_effort(
+                            request_id=request_id,
+                            dependency=dependency,
+                        )
+                    )
 
     return JSONResponse(
         status_code=(
