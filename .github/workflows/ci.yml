@@ -50,14 +50,16 @@ jobs:
             -q \
             gateway \
             tests \
-            migrations
+            migrations \
+            tools
 
       - name: Ruff critical checks
         run: |
           ruff check \
             gateway \
             tests \
-            migrations
+            migrations \
+            tools
 
       - name: Run test suite
         run: |
