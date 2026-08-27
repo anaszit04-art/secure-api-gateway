@@ -180,4 +180,3 @@ def emit_readiness_dependency_log_best_effort(
 
     except Exception:
         return
-
