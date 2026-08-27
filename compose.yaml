@@ -6,7 +6,7 @@ x-python-service: &python-service
     context: .
     dockerfile: Dockerfile
 
-  image: secure-api-gateway:phase6
+  image: secure-api-gateway:phase7
 
   init: true
   restart: unless-stopped
@@ -219,8 +219,8 @@ services:
       - "8000"
 
     environment:
-      SERVICE_A_URL: http://service-a:8001
-      SERVICE_B_URL: http://service-b:8002
+      SERVICE_A_URL: "${SERVICE_A_URL:-http://service-a:8001}"
+      SERVICE_B_URL: "${SERVICE_B_URL:-http://service-b:8002}"
 
 
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-gateway}"
@@ -242,10 +242,11 @@ services:
       REDIS_CONNECT_TIMEOUT_SECONDS: "${REDIS_CONNECT_TIMEOUT_SECONDS:-2}"
       REDIS_SOCKET_TIMEOUT_SECONDS: "${REDIS_SOCKET_TIMEOUT_SECONDS:-2}"
       REDIS_MAX_CONNECTIONS: "${REDIS_MAX_CONNECTIONS:-20}"
+      REDIS_HEALTH_CHECK_INTERVAL_SECONDS: "${REDIS_HEALTH_CHECK_INTERVAL_SECONDS:-30}"
       REDIS_VERIFY_ON_STARTUP: "true"
 
       METRICS_ENABLED: "${METRICS_ENABLED:-true}"
-      METRICS_HOST: "0.0.0.0"
+      METRICS_HOST: "${METRICS_HOST:-0.0.0.0}"
       METRICS_PORT: "${METRICS_PORT:-9100}"
 
       UPSTREAM_MAX_ATTEMPTS: "${UPSTREAM_MAX_ATTEMPTS:-2}"
@@ -256,12 +257,6 @@ services:
 
     depends_on:
       postgres:
-        condition: service_healthy
-
-      service-a:
-        condition: service_healthy
-
-      service-b:
         condition: service_healthy
 
       redis:

@@ -1015,6 +1015,57 @@ Les valeurs sont volontairement bornées par l'application afin
 d'éviter des politiques de retry ou de circuit breaker
 excessives.
 
+## Configuration production Phase 7
+
+La configuration de production applique une séparation entre
+les dépendances critiques et les services métier upstream.
+
+PostgreSQL et Redis sont considérés comme critiques pour
+l'acceptation du trafic. Docker Compose attend donc leur état
+healthy et la Gateway vérifie également leur connexion au
+démarrage.
+
+À l'inverse, `service-a` et `service-b` ne conditionnent plus
+le démarrage de la Gateway. Leur indisponibilité est gérée par
+les mécanismes de retry et de circuit breaker. Cette règle est
+cohérente avec la readiness `/ready`, qui ne dépend que de
+PostgreSQL et Redis.
+
+Les URLs upstream peuvent être configurées par :
+
+    SERVICE_A_URL
+    SERVICE_B_URL
+
+Elles sont validées avant utilisation. Seuls `http` et `https`
+sont autorisés. Les URLs contenant des credentials, une query
+string, un fragment, un hostname absent ou une syntaxe invalide
+sont rejetées.
+
+L'image de travail Phase 7 est :
+
+    secure-api-gateway:phase7
+
+Les secrets obligatoires de `.env.example` sont volontairement
+vides afin qu'une copie non configurée du fichier échoue au lieu
+de démarrer avec un secret d'exemple.
+
+Le serveur Prometheus utilise :
+
+    METRICS_HOST
+    METRICS_PORT
+
+Dans Docker Compose, `METRICS_HOST` vaut par défaut `0.0.0.0`
+à l'intérieur du conteneur, tandis que le port métriques reste
+non publié sur l'hôte.
+
+La Gateway s'exécute avec un utilisateur non-root, un root
+filesystem en lecture seule, toutes les capabilities supprimées
+et `no-new-privileges`.
+
+PostgreSQL conserve volontairement le comportement filesystem de
+l'image officielle afin de préserver son mécanisme
+d'initialisation.
+
 ## Démarrage
 
 Démarrer le stack :
