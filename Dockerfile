@@ -19,8 +19,6 @@ RUN groupadd \
 COPY requirements-runtime.txt ./
 
 RUN python -m pip install \
-        --upgrade pip \
-    && python -m pip install \
         --requirement requirements-runtime.txt
 
 COPY --chown=10001:10001 gateway ./gateway

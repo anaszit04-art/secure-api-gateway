@@ -5,7 +5,12 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import (
+    FastAPI,
+    Request,
+    status,
+)
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from gateway.app.auth.router import (
@@ -22,6 +27,9 @@ from gateway.app.database.client import (
 )
 from gateway.app.database.config import (
     DatabaseSettings,
+)
+from gateway.app.observability.logging import (
+    emit_readiness_dependency_log_best_effort,
 )
 from gateway.app.observability.metrics import (
     GatewayMetrics,
@@ -44,6 +52,9 @@ from gateway.app.proxy.resilience import (
 )
 from gateway.app.proxy.router import (
     router as proxy_router,
+)
+from gateway.app.readiness import (
+    evaluate_readiness,
 )
 from gateway.app.rate_limit.client import (
     close_redis_client,
@@ -240,7 +251,7 @@ app = FastAPI(
         "rate limiting, RBAC, audit de sécurité, "
         "observabilité et reverse proxy résilient."
     ),
-    version="0.6.0",
+    version="0.7.0",
     lifespan=lifespan,
 )
 
@@ -261,3 +272,79 @@ async def health() -> dict[str, str]:
     return {
         "status": "ok",
     }
+
+
+@app.get(
+    "/ready",
+    tags=["System"],
+    responses={
+        503: {
+            "description": (
+                "Gateway dependencies "
+                "are unavailable."
+            ),
+        },
+    },
+)
+async def ready(
+    request: Request,
+) -> JSONResponse:
+    report = await evaluate_readiness(
+        database_engine=getattr(
+            request.app.state,
+            "database_engine",
+            None,
+        ),
+        redis_client=getattr(
+            request.app.state,
+            "redis_client",
+            None,
+        ),
+    )
+
+    if not report.ready:
+        request_id = getattr(
+            request.state,
+            "request_id",
+            None,
+        )
+
+        if isinstance(
+            request_id,
+            str,
+        ):
+            for (
+                dependency,
+                dependency_status,
+            ) in (
+                (
+                    "database",
+                    report.database,
+                ),
+                (
+                    "redis",
+                    report.redis,
+                ),
+            ):
+                if (
+                    dependency_status
+                    == "unavailable"
+                ):
+                    (
+                        emit_readiness_dependency_log_best_effort(
+                            request_id=request_id,
+                            dependency=dependency,
+                        )
+                    )
+
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if report.ready
+            else (
+                status
+                .HTTP_503_SERVICE_UNAVAILABLE
+            )
+        ),
+        content=report.as_payload(),
+    )

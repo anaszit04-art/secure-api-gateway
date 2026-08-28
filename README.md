@@ -10,7 +10,7 @@ et le routage résilient vers des microservices internes.
 
 Version applicative validée :
 
-    0.6.0
+    0.7.0
 
 Image applicative Docker :
 
@@ -874,6 +874,68 @@ Une panne d'observabilité ne doit pas modifier une réponse
 métier déjà calculée et ne doit pas masquer une exception
 applicative originale.
 
+## Liveness et readiness
+
+La Gateway distingue explicitement la liveness de la
+readiness.
+
+La route :
+
+    GET /health
+
+est une sonde de liveness. Elle confirme uniquement que le
+processus HTTP de la Gateway fonctionne et retourne :
+
+    HTTP 200
+    {"status":"ok"}
+
+Elle ne contacte ni PostgreSQL, ni Redis, ni les services
+upstream. Cette séparation évite qu'une indisponibilité de
+dépendance entraîne un redémarrage inutile du processus.
+
+La route :
+
+    GET /ready
+
+est une sonde de readiness destinée à déterminer si la Gateway
+peut accepter du trafic nécessitant ses dépendances critiques.
+
+Elle vérifie en parallèle :
+
+    PostgreSQL
+    Redis
+
+Lorsque les deux dépendances sont disponibles :
+
+    HTTP 200
+
+avec un état normalisé `ready`.
+
+Lorsqu'au moins une dépendance critique n'est pas disponible :
+
+    HTTP 503
+
+avec un état normalisé `not_ready`.
+
+Les messages d'exception, URLs, hôtes, ports et informations de
+connexion ne sont jamais exposés dans la réponse.
+
+Chaque contrôle est borné dans le temps afin qu'une dépendance
+bloquée ne puisse pas immobiliser indéfiniment la sonde.
+
+Les services `service-a` et `service-b` ne participent
+volontairement pas à la readiness globale. Leur disponibilité
+est gérée indépendamment par les circuit breakers de la
+Gateway. La panne d'un service ne doit donc pas retirer
+l'ensemble de la Gateway du trafic.
+
+Le serveur Prometheus ne participe pas non plus à la readiness,
+car l'observabilité suit une politique best-effort.
+
+Le healthcheck Docker de la Gateway continue à utiliser
+`/health` et non `/ready`. La liveness ne doit pas être couplée
+à l'état temporaire de PostgreSQL ou Redis.
+
 ## Prérequis
 
 - Python 3.13 ;
@@ -952,6 +1014,57 @@ Variables de résilience upstream :
 Les valeurs sont volontairement bornées par l'application afin
 d'éviter des politiques de retry ou de circuit breaker
 excessives.
+
+## Configuration production Phase 7
+
+La configuration de production applique une séparation entre
+les dépendances critiques et les services métier upstream.
+
+PostgreSQL et Redis sont considérés comme critiques pour
+l'acceptation du trafic. Docker Compose attend donc leur état
+healthy et la Gateway vérifie également leur connexion au
+démarrage.
+
+À l'inverse, `service-a` et `service-b` ne conditionnent plus
+le démarrage de la Gateway. Leur indisponibilité est gérée par
+les mécanismes de retry et de circuit breaker. Cette règle est
+cohérente avec la readiness `/ready`, qui ne dépend que de
+PostgreSQL et Redis.
+
+Les URLs upstream peuvent être configurées par :
+
+    SERVICE_A_URL
+    SERVICE_B_URL
+
+Elles sont validées avant utilisation. Seuls `http` et `https`
+sont autorisés. Les URLs contenant des credentials, une query
+string, un fragment, un hostname absent ou une syntaxe invalide
+sont rejetées.
+
+L'image de travail Phase 7 est :
+
+    secure-api-gateway:phase7
+
+Les secrets obligatoires de `.env.example` sont volontairement
+vides afin qu'une copie non configurée du fichier échoue au lieu
+de démarrer avec un secret d'exemple.
+
+Le serveur Prometheus utilise :
+
+    METRICS_HOST
+    METRICS_PORT
+
+Dans Docker Compose, `METRICS_HOST` vaut par défaut `0.0.0.0`
+à l'intérieur du conteneur, tandis que le port métriques reste
+non publié sur l'hôte.
+
+La Gateway s'exécute avec un utilisateur non-root, un root
+filesystem en lecture seule, toutes les capabilities supprimées
+et `no-new-privileges`.
+
+PostgreSQL conserve volontairement le comportement filesystem de
+l'image officielle afin de préserver son mécanisme
+d'initialisation.
 
 ## Démarrage
 
@@ -1166,10 +1279,221 @@ Inspection des clés Redis :
 Les noms d'utilisateur, UUID et adresses IP ne doivent pas
 apparaître en clair dans les clés Redis.
 
+## Intégration continue
+
+Le projet possède un pipeline GitHub Actions dans :
+
+    .github/workflows/ci.yml
+
+Le pipeline s'exécute lors des push, pull requests et
+déclenchements manuels.
+
+Il est composé de trois jobs indépendants.
+
+Le job `quality` :
+
+- installe les dépendances runtime et développement ;
+- vérifie les dépendances avec `pip check` ;
+- compile les sources Python ;
+- exécute les contrôles Ruff critiques ;
+- lance l'intégralité de la suite Pytest.
+
+Le job `database` démarre une instance PostgreSQL éphémère,
+applique toutes les migrations Alembic depuis une base vide,
+vérifie qu'il existe un unique head et détecte tout drift entre
+les modèles SQLAlchemy et les migrations.
+
+Le job `container` :
+
+- valide Docker Compose ;
+- construit l'image Gateway ;
+- vérifie l'utilisateur non-root ;
+- vérifie que les secrets runtime ne sont pas intégrés à
+  l'image ou à son historique ;
+- vérifie les exclusions du build context ;
+- bloque le pipeline si `.env` est tracké ;
+- exige que les secrets de `.env.example` restent vides.
+
+La CI utilise uniquement des credentials éphémères de test.
+Aucun secret de production n'est stocké dans le workflow.
+
+Les contrôles Ruff sont volontairement limités aux catégories
+d'erreurs critiques. La Phase 7 n'impose pas un reformatage
+global du code historique.
+
+La livraison vers une infrastructure externe n'est pas
+automatisée car aucune cible de déploiement production n'est
+définie dans ce projet. Le pipeline automatise donc la
+validation, les migrations et la construction de l'artefact
+Docker sans prétendre effectuer un déploiement inexistant.
+
+## Runbook d'exploitation
+
+Les procédures opérationnelles de production sont regroupées
+dans [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+Le runbook couvre la liveness, la readiness, les logs JSON,
+la corrélation par request ID, Prometheus, Redis, PostgreSQL,
+les incidents upstream, la rotation des logs et les critères
+de récupération.
+
+## Validation charge et résilience Phase 7
+
+La validation finale de production inclut des scénarios de
+charge bornée et de panne contrôlée exécutés sur une VM de
+développement disposant de 2 vCPU et environ 3,8 GiB de RAM.
+
+Les outils reproductibles sont disponibles dans :
+
+    tools/phase7_load_probe.py
+    tools/phase7_metrics_delta.py
+
+Ils utilisent `httpx.AsyncClient` et mesurent notamment le
+débit, les codes HTTP, les erreurs transport ainsi que les
+latences min, moyenne, p50, p95, p99 et max.
+
+Les mesures de débit sont propres à cet environnement de test
+et ne constituent pas un SLA de production.
+
+### Charge nominale
+
+Les principaux résultats obtenus sont :
+
+- `/health`, 100 requêtes, concurrence 5 :
+  126,99 req/s, 100 % HTTP 200 ;
+- `/health`, 300 requêtes, concurrence 10 :
+  130,63 req/s, 100 % HTTP 200 ;
+- `/health`, 500 requêtes, concurrence 20 :
+  140,22 req/s, 100 % HTTP 200 et aucune erreur transport ;
+- `/ready`, 100 requêtes, concurrence 5 :
+  97,17 req/s, 100 % HTTP 200 ;
+- proxy Service A, 30 requêtes, concurrence 5 :
+  53,04 req/s, 100 % HTTP 200 ;
+- proxy Service B, 20 requêtes, concurrence 5 :
+  54,81 req/s, 100 % HTTP 200.
+
+Après les scénarios de panne, `/health` a de nouveau supporté
+300 requêtes avec concurrence 10 à 185,27 req/s avec
+100 % HTTP 200.
+
+Le proxy final exécuté avec une nouvelle identité a produit
+20/20 HTTP 200 à 56,19 req/s sans erreur transport.
+Prometheus a confirmé 20 décisions de rate limiting autorisées
+et 20 réponses upstream 2xx.
+
+La readiness a ensuite été soumise à deux validations de
+stabilisation supplémentaires :
+
+- 200/200 HTTP 200 avec concurrence 5 ;
+- 200/200 HTTP 200 en exécution séquentielle.
+
+### Rate limiting
+
+Un burst authentifié de 90 requêtes avec concurrence 20 a
+produit :
+
+- 66 réponses HTTP 200 ;
+- 24 réponses HTTP 429 ;
+- aucune erreur transport ;
+- `Retry-After` sur les rejets.
+
+Les métriques Prometheus ont confirmé :
+
+- `allowed +66` ;
+- `rejected +24`.
+
+La capacité initiale du bucket est de 60 requêtes avec une
+recharge de un token par seconde. Le nombre total de requêtes
+autorisées peut donc dépasser légèrement 60 pendant un test
+suffisamment long.
+
+### Circuit breaker
+
+Service A a été arrêté volontairement.
+
+La séquence observée a été :
+
+- trois réponses HTTP 502 initiales ;
+- ouverture du circuit après trois échecs ;
+- rejets HTTP 503 lorsque le circuit est ouvert ;
+- sous concurrence, un seul probe HALF_OPEN a été autorisé
+  tandis que dix-neuf requêtes ont été rejetées localement ;
+- Service B est resté disponible en HTTP 200.
+
+Prometheus a confirmé les événements `retry`,
+`circuit_open`, `circuit_rejected` puis
+`circuit_recovered`.
+
+Après redémarrage de Service A et expiration de la fenêtre de
+récupération, le probe HALF_OPEN a réussi en HTTP 200 puis dix
+requêtes supplémentaires ont toutes réussi.
+
+### Panne Redis
+
+Pendant l'arrêt de Redis :
+
+- `/health` est resté HTTP 200 ;
+- `/ready` est passé HTTP 503 ;
+- le proxy authentifié a produit 5/5 HTTP 503 ;
+- `Retry-After: 1` était présent ;
+- la métrique `rate_limit unavailable` a augmenté de cinq.
+
+Après redémarrage de Redis, `/ready` et le proxy sont revenus
+en HTTP 200.
+
+Un appel proxy immédiatement postérieur aux scénarios de
+redémarrage a également été rejeté une fois en HTTP 503.
+Son événement d'audit l'a identifié comme
+`proxy_rate_limit_backend_unavailable`. Le comportement est
+donc resté fail-closed. Une validation ultérieure avec une
+nouvelle identité a produit 20/20 HTTP 200.
+
+### Panne PostgreSQL
+
+PostgreSQL a été arrêté jusqu'à obtenir explicitement
+`Running=false`.
+
+Pendant la panne :
+
+- `/health` est resté HTTP 200 ;
+- `/ready` est passé HTTP 503 ;
+- un JWT valide déjà émis a produit 2/2 HTTP 503 sur
+  `/auth/me` ;
+- le proxy a produit 3/3 HTTP 503 ;
+- Service A et Service B sont restés healthy.
+
+Ce scénario confirme qu'un JWT valide n'est jamais considéré
+comme une autorisation suffisante. L'identité et les droits
+courants doivent toujours pouvoir être rechargés depuis
+PostgreSQL.
+
+Après redémarrage de PostgreSQL, `/ready`, `/auth/me` et le
+proxy sont revenus en HTTP 200 sans redémarrage de la Gateway.
+
+### Stabilisation après redémarrage
+
+Un unique HTTP 503 a été observé sur `/ready` lors d'un test
+immédiatement postérieur aux scénarios de redémarrage des
+dépendances. Le log de requête ne permettait pas d'identifier
+rétrospectivement laquelle des deux dépendances avait échoué.
+
+Ce comportement n'a pas persisté :
+
+- 200 appels concurrents à `/ready` ont ensuite produit
+  200/200 HTTP 200 ;
+- 200 appels séquentiels ont également produit
+  200/200 HTTP 200 ;
+- Redis a répondu à 200/200 PING directs ;
+- PostgreSQL a répondu à 100/100 `SELECT 1` directs.
+
+Le système conserve donc une stratégie fail-closed pendant
+les transitions de dépendances, puis retrouve un état nominal
+stable sans redémarrage de la Gateway.
+
 ## Limites actuelles
 
 - `/health` représente actuellement uniquement la liveness ;
-- aucune route de readiness complète n'est encore exposée ;
+- la readiness `/ready` vérifie PostgreSQL et Redis ; les services upstream restent volontairement hors de cette décision afin de préserver leur isolation par circuit breaker ;
 - Redis ne possède volontairement aucune persistance disque ;
 - le bootstrap du tout premier administrateur reste une opération
   contrôlée côté infrastructure/base de données ;
@@ -1188,7 +1512,7 @@ apparaître en clair dans les clés Redis.
 - l'API applicative traite l'audit comme append-oriented, mais
   l'immutabilité n'est pas imposée par une protection spécifique
   au niveau PostgreSQL ;
-- le déploiement CI/CD n'est pas encore finalisé.
+- la CI valide le code, les migrations et l'image Docker, mais aucun déploiement vers une infrastructure de production externe n'est configuré.
 
 ## Licence
 

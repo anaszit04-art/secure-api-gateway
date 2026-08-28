@@ -1,15 +1,24 @@
 name: secure-api-gateway
 
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+
 x-python-service: &python-service
   build:
     context: .
     dockerfile: Dockerfile
 
-  image: secure-api-gateway:phase6
+  image: secure-api-gateway:phase7
 
   init: true
   restart: unless-stopped
+
+  logging: *default-logging
 
   read_only: true
 
@@ -39,6 +48,7 @@ services:
       - 0.0.0.0
       - --port
       - "8001"
+      - --no-access-log
 
     expose:
       - "8001"
@@ -72,6 +82,7 @@ services:
       - 0.0.0.0
       - --port
       - "8002"
+      - --no-access-log
 
     expose:
       - "8002"
@@ -99,6 +110,8 @@ services:
 
     init: true
     restart: unless-stopped
+
+    logging: *default-logging
 
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-gateway}"
@@ -137,6 +150,8 @@ services:
     init: true
     user: redis
     restart: unless-stopped
+
+    logging: *default-logging
 
     command:
       - redis-server
@@ -217,10 +232,11 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+      - --no-access-log
 
     environment:
-      SERVICE_A_URL: http://service-a:8001
-      SERVICE_B_URL: http://service-b:8002
+      SERVICE_A_URL: "${SERVICE_A_URL:-http://service-a:8001}"
+      SERVICE_B_URL: "${SERVICE_B_URL:-http://service-b:8002}"
 
 
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-gateway}"
@@ -242,10 +258,11 @@ services:
       REDIS_CONNECT_TIMEOUT_SECONDS: "${REDIS_CONNECT_TIMEOUT_SECONDS:-2}"
       REDIS_SOCKET_TIMEOUT_SECONDS: "${REDIS_SOCKET_TIMEOUT_SECONDS:-2}"
       REDIS_MAX_CONNECTIONS: "${REDIS_MAX_CONNECTIONS:-20}"
+      REDIS_HEALTH_CHECK_INTERVAL_SECONDS: "${REDIS_HEALTH_CHECK_INTERVAL_SECONDS:-30}"
       REDIS_VERIFY_ON_STARTUP: "true"
 
       METRICS_ENABLED: "${METRICS_ENABLED:-true}"
-      METRICS_HOST: "0.0.0.0"
+      METRICS_HOST: "${METRICS_HOST:-0.0.0.0}"
       METRICS_PORT: "${METRICS_PORT:-9100}"
 
       UPSTREAM_MAX_ATTEMPTS: "${UPSTREAM_MAX_ATTEMPTS:-2}"
@@ -256,12 +273,6 @@ services:
 
     depends_on:
       postgres:
-        condition: service_healthy
-
-      service-a:
-        condition: service_healthy
-
-      service-b:
         condition: service_healthy
 
       redis:
