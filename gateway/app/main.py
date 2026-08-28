@@ -251,7 +251,7 @@ app = FastAPI(
         "rate limiting, RBAC, audit de sécurité, "
         "observabilité et reverse proxy résilient."
     ),
-    version="0.6.0",
+    version="0.7.0",
     lifespan=lifespan,
 )
 

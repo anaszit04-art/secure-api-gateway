@@ -10,7 +10,7 @@ et le routage résilient vers des microservices internes.
 
 Version applicative validée :
 
-    0.6.0
+    0.7.0
 
 Image applicative Docker :
 
